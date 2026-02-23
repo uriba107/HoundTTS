@@ -21,65 +21,12 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 | **SimpleRadioStandalone (SRS)**                                                 | Required for all transmission. See [SRS requirements](https://github.com/ciribob/DCS-SimpleRadioStandalone) for its own .NET dependency |
 | **.NET**                                                                        | Not required by HoundTTS.dll itself — pure native C++                                                                                   |
 
-### Build (Docker)
-
-- **Windows containers** build: Windows Docker host with Windows containers mode enabled
-- **Linux containers** build: any Docker host (Linux, macOS, Windows with Linux containers)
-
-## Building
-
-### Docker (recommended)
-
-Two pipelines are available, both invoked via the same PowerShell script:
-
-#### Windows containers (MSVC — full feature set including SAPI)
-
-Requires Docker Desktop in **Windows containers** mode.
-
-```powershell
-.\build-docker.ps1
-```
-
-Builds with MSVC + Windows 10 SDK (19041) inside a Windows Server Core container. All providers including SAPI 5.4 are available.
-
-#### Linux containers (MinGW cross-compile)
-
-Requires Docker Desktop in **Linux containers** mode.
-
-```powershell
-.\build-docker.ps1 -Windows:$false
-```
-
-Or on Linux/macOS:
-
-```bash
-./build-docker.sh
-```
-
-Cross-compiles with `mingw-w64` from a Debian container. SAPI is not available in this build (returns silence). All other providers work.
-
-Both pipelines produce the same `dist\` layout:
-
-```
-dist\
-├── base\          ← DLL + Lua scripts (always install this)
-└── piper-addon\   ← Piper engine + bundled voices (install for Piper TTS)
-```
-
-### Windows (native, no Docker)
-
-```bat
-build.bat
-```
-
-Auto-detects MinGW or MSVC CLI, generates the import library from `lua.dll`, builds the DLL, and copies everything to `dist\`.
-
 ## Installation
 
 ### 1. Copy files
 
-Install `dist\base\` into your DCS Saved Games folder (e.g. `%USERPROFILE%\Saved Games\DCS\`).  
-For Piper TTS, also install `dist\piper-addon\` on top of it.
+Download the latest release from [GitHub releases](https://github.com/uriba107/HoundTTS/releases) and extract it into your DCS Saved Games folder (e.g. `%USERPROFILE%\Saved Games\DCS\`).
+Each release includes two archives: the required **base** package, and an optional **piper-addon** package that contains everything needed to run [Piper TTS](https://github.com/piper-tts-go/piper).
 
 > **Config files:** copy each `.example` file to the same name without `.example` and edit it. These files are never overwritten by updates — your live settings are safe.
 
@@ -154,7 +101,7 @@ Uses the Windows Speech API 5.4 (`ISpVoice`) — the same engine used by Narrato
 
 > **Aliases:** `"sapi"` and `"win"` are interchangeable.
 
-> **Requires the MSVC build** (`.\.build-docker.ps1`). The MinGW build returns silence for SAPI.
+> **Requires the MSVC build** (`.\build-docker.ps1`). The MinGW build returns silence for SAPI.
 
 ```lua
 -- Use the default system voice
@@ -273,7 +220,7 @@ SRS_ENCRYPT          = false          -- global encryption default
 SRS_ENC_KEY          = 0             -- global encryption key
 
 DEFAULT_TRANSMITTER  = "srs"
-DEFAULT_PROVIDER     = "sapi"       -- "piper" | "sapi" | "azure" | "google" | "elevenlabs"
+DEFAULT_PROVIDER     = "sapi"       -- "piper" | "sapi" | "azure" | "google" | "elevenlabs" | "polly"
 DEFAULT_VOICE        = ""            -- default voice/model name
 DEFAULT_CULTURE      = "en-US"       -- default culture/locale
 DEFAULT_GENDER       = "female"      -- "male" | "female"
@@ -429,14 +376,14 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 
 **Provider routing:**
 
-| `transmitter` | `provider`     | Engine used                         |
-| ------------- | -------------- | ----------------------------------- |
-| `"srs"`       | `"piper"`      | Direct SRS + Piper TTS (offline)    |
-| `"srs"`       | `"sapi"`       | Direct SRS + Windows SAPI 5.4       |
-| `"srs"`       | `"azure"`      | Direct SRS + Azure Cognitive Speech |
-| `"srs"`       | `"google"`     | Direct SRS + Google Cloud TTS       |
-| `"srs"`       | `"elevenlabs"` | Direct SRS + ElevenLabs WebSocket   |
-| `"srs"`       | `"polly"`      | Direct SRS + AWS Polly              |
+| `transmitter` | `provider`     | Engine used                             |
+| ------------- | -------------- | --------------------------------------- |
+| `"srs"`       | `"piper"`      | Direct SRS + Piper TTS (offline)        |
+| `"srs"`       | `"sapi"`       | Direct SRS + Windows SAPI 5.4 (offline) |
+| `"srs"`       | `"azure"`      | Direct SRS + Azure Cognitive Speech     |
+| `"srs"`       | `"google"`     | Direct SRS + Google Cloud TTS           |
+| `"srs"`       | `"elevenlabs"` | Direct SRS + ElevenLabs WebSocket       |
+| `"srs"`       | `"polly"`      | Direct SRS + AWS Polly                  |
 
 Returns: estimated speech time in seconds.
 
@@ -514,9 +461,43 @@ src/
     │   └── azure_tts.*        # Azure Cognitive Services REST API
     ├── google/
     │   └── google_tts.*       # Google Cloud TTS REST API (OAuth2 service-account JWT via OpenSSL)
+    ├── polly/
+    │   └── polly_tts.*        # AWS Polly REST API
     └── elevenlabs/
         └── elevenlabs_tts.*   # ElevenLabs WebSocket streaming API
 ```
+
+## Building
+
+### Docker (recommended)
+
+A pipeline is available, invoked via the PowerShell script:
+
+#### Windows containers (MSVC — full feature set including SAPI)
+
+Requires Docker Desktop in **Windows containers** mode.
+
+```powershell
+.\build-docker.ps1
+```
+
+Builds with MSVC + Windows 10 SDK (19041) inside a Windows Server Core container. All providers, including SAPI 5.4, are available.
+
+The pipeline produces the following `dist\` layout:
+
+```
+dist\
+├── base\          ← DLL + Lua scripts (always install this)
+└── piper-addon\   ← Piper engine + bundled voices (install for Piper TTS)
+```
+
+### Windows (native, no Docker)
+
+```bat
+build.bat
+```
+
+Auto-detects MinGW or MSVC CLI, generates the import library from `lua.dll`, builds the DLL, and copies everything to `dist\`.
 
 ## Acknowledgements
 
