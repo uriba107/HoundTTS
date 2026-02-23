@@ -1,0 +1,143 @@
+# Windows container build — requires a Windows Docker host with Windows containers enabled.
+# Produces the same /dist layout as the Linux/MinGW Dockerfile.
+#
+# Two-stage build:
+#   deps  — Chocolatey + VS Build Tools + vcpkg + OpenSSL (~15 GB, cached after first run)
+#   build — COPY source + compile + assemble dist (fast, runs on every code change)
+#
+# Usage (from PowerShell on the Windows host):
+#   .\build-docker.ps1
+#   docker run --rm -v C:\output:C:\output houndtts-builder-msvc
+
+# ============================================================
+# Stage 1: deps — all heavy toolchain installs, no source code
+# ============================================================
+FROM mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2019 AS deps
+
+SHELL ["cmd", "/S", "/C"]
+
+# Chocolatey
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; \
+     iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
+
+RUN choco install -y cmake --installargs "ADD_CMAKE_TO_PATH=System"
+RUN choco install -y wget unzip git
+RUN choco install -y strawberryperl
+
+# Visual Studio 2022 Build Tools — MSVC v143 + Windows 10 SDK 19041 (sapi.h, sphelper.h, COM headers)
+# Split into two layers to avoid hcsshim ImportLayer failure on large single layers
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile 'C:\vs_buildtools.exe'"
+
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$p = Start-Process -FilePath 'C:\vs_buildtools.exe' -Wait -PassThru -ArgumentList \
+       '--quiet','--wait','--norestart','--nocache', \
+       '--installPath','C:\BuildTools', \
+       '--add','Microsoft.VisualStudio.Workload.VCTools', \
+       '--add','Microsoft.VisualStudio.Component.VC.Tools.x86.x64', \
+       '--add','Microsoft.VisualStudio.Component.Windows10SDK.19041'; \
+     Remove-Item 'C:\vs_buildtools.exe'; \
+     if ($p.ExitCode -ne 0) { throw \"vs_buildtools.exe exited with code $($p.ExitCode)\" }"
+
+# vcpkg + OpenSSL static
+RUN git clone https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
+    C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics
+RUN C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static && \
+    C:\\vcpkg\\vcpkg.exe integrate install
+
+# cpp-httplib header (version-pinned to avoid surprises on rebuilds)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
+     Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h' \
+     -OutFile 'C:\deps\include\httplib.h'"
+
+# Piper release + voice models (large downloads, cache here not in build stage)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$rel = (Invoke-WebRequest -Uri 'https://api.github.com/repos/piper-tts-go/piper/releases/latest' \
+             -UseBasicParsing | ConvertFrom-Json).tag_name; \
+     Write-Host \"Downloading piper $rel\"; \
+     Invoke-WebRequest -Uri \"https://github.com/piper-tts-go/piper/releases/download/$rel/piper_windows_amd64.zip\" \
+         -OutFile C:\piper.zip; \
+     Expand-Archive -Path C:\piper.zip -DestinationPath C:\piper_extracted; \
+     New-Item -ItemType Directory -Force -Path 'C:\deps\piper' | Out-Null; \
+     Copy-Item -Recurse 'C:\piper_extracted\piper\*' 'C:\deps\piper\'; \
+     Remove-Item -Recurse -Force C:\piper.zip, C:\piper_extracted"
+
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$hf = 'https://huggingface.co/rhasspy/piper-voices/resolve/main'; \
+     New-Item -ItemType Directory -Force -Path 'C:\deps\voices' | Out-Null; \
+     @( \
+       'en/en_US/lessac/low/en_US-lessac-low.onnx', \
+       'en/en_US/lessac/low/en_US-lessac-low.onnx.json', \
+       'en/en_US/ryan/low/en_US-ryan-low.onnx', \
+       'en/en_US/ryan/low/en_US-ryan-low.onnx.json' \
+     ) | ForEach-Object { \
+       $file = Split-Path $_ -Leaf; \
+       Invoke-WebRequest -Uri \"$hf/$_\" -OutFile \"C:\deps\voices\$file\" \
+     }"
+
+# ============================================================
+# Stage 2: piper — assemble piper-addon from cached deps
+#           No source dependency; never reruns on code changes
+# ============================================================
+FROM deps AS piper
+
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "New-Item -ItemType Directory -Force 'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
+     New-Item -ItemType Directory -Force 'C:\dist\piper-addon\Mods\Services\HoundTTS\voices' | Out-Null; \
+     Copy-Item -Recurse -Force 'C:\deps\piper\*'  'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item -Recurse -Force 'C:\deps\voices\*' 'C:\dist\piper-addon\Mods\Services\HoundTTS\voices'"
+
+# ============================================================
+# Stage 3: build — copy source, compile, assemble dist/base
+#           Rebuilds fast on code changes; deps layer is cached
+# ============================================================
+FROM deps AS build
+
+WORKDIR C:\\src
+COPY . C:\\src\\
+
+# Overlay httplib header from deps stage
+RUN copy C:\\deps\\include\\httplib.h C:\\src\\include\\httplib.h
+
+# Generate lua.lib from bundled lua.dll using PowerShell + full paths (no vcvars needed)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\src\make_lua_lib.ps1
+
+# CMake configure
+RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
+    cmake -S C:\src -B C:\build \
+      -G "NMake Makefiles" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake \
+      -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
+# Compile
+RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
+    cmake --build C:\build --config Release
+
+# Assemble dist/base
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "New-Item -ItemType Directory -Force 'C:\dist\base\Mods\Services\HoundTTS\bin' | Out-Null; \
+     New-Item -ItemType Directory -Force 'C:\dist\base\Mods\Services\HoundTTS\Scripts' | Out-Null; \
+     New-Item -ItemType Directory -Force 'C:\dist\base\Mods\Services\HoundTTS\examples' | Out-Null; \
+     New-Item -ItemType Directory -Force 'C:\dist\base\Scripts\Hooks' | Out-Null; \
+     New-Item -ItemType Directory -Force 'C:\dist\base\Config' | Out-Null; \
+     Copy-Item 'C:\build\bin\HoundTTS.dll'                                      'C:\dist\base\Mods\Services\HoundTTS\bin'; \
+     Copy-Item 'C:\src\dcs\Mods\Services\HoundTTS\Scripts\HoundTTS.lua'         'C:\dist\base\Mods\Services\HoundTTS\Scripts'; \
+     Copy-Item 'C:\src\dcs\Mods\Services\HoundTTS\Scripts\HoundTTS-mission.lua' 'C:\dist\base\Mods\Services\HoundTTS\Scripts'; \
+     Copy-Item 'C:\src\dcs\Mods\Services\HoundTTS\examples\*'                   'C:\dist\base\Mods\Services\HoundTTS\examples'; \
+     Copy-Item 'C:\src\dcs\Scripts\Hooks\HoundTTS-hook.lua'                     'C:\dist\base\Scripts\Hooks'; \
+     Copy-Item 'C:\src\dcs\Config\HoundTTS-config.lua.example'                  'C:\dist\base\Config\HoundTTS.lua.example'; \
+     Copy-Item 'C:\src\dcs\Config\HoundTTS-credentials.ini.example'             'C:\dist\base\Config\HoundTTS-credentials.ini.example'"
+
+# ============================================================
+# Stage 4: output — merge build + piper into final image
+# ============================================================
+FROM mcr.microsoft.com/windows/servercore:ltsc2019 AS output
+
+COPY --from=build C:\\dist\\base         C:\\dist\\base
+COPY --from=piper C:\\dist\\piper-addon  C:\\dist\\piper-addon
+
+# Copy dist to C:\output on run
+CMD xcopy /E /I /Y C:\\dist C:\\output

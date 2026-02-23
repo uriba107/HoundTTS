@@ -1,0 +1,42 @@
+-- ============================================================
+-- HoundTTS Configuration
+-- Copy this file to: Saved Games\DCS\Config\HoundTTS.lua
+-- and edit the values you want to change.
+-- All settings are optional — remove or comment out any line
+-- to use the default value.
+-- ============================================================
+
+
+-- SRS Connection
+SRS_HOST    = "127.0.0.1"
+SRS_PORT    = 5002
+SRS_ENCRYPT = false
+SRS_ENC_KEY = 0
+
+DEFAULT_TRANSMITTER = "srs"
+
+-- Default TTS provider (used when transmitter = "srs"):
+--   "sapi"        — Windows SAPI (stub, limited quality)
+--   "piper"       — local offline TTS (bundled, seperate download, no API key needed)
+--   "azure"       — Azure Cognitive Services Speech (API key required)
+--   "google"      — Google Cloud Text-to-Speech (API key required)
+--   "elevenlabs"  — ElevenLabs (API key required)
+--   "polly"       — Amazon Polly (API key required)
+DEFAULT_PROVIDER = "sapi"
+
+-- Default voice / style (can be overridden per-call in provider_params)
+-- For "piper":      Piper model name e.g. "en_US-lessac-low"
+-- For "elevenlabs": ElevenLabs voice ID (can also be set per-call)
+-- For "azure":      Azure voice name e.g. "en-US-AriaNeural"
+-- For "google":     Google voice name e.g. "en-GB-Neural2-A"
+-- For "polly":      Polly VoiceId e.g. "Joanna" (auto-selected from culture+gender if blank)
+DEFAULT_VOICE   = ""
+-- Default Piper speaker name or integer ID for multi-speaker models.
+-- Leave blank to use the model's default speaker.
+DEFAULT_SPEAKER = ""
+DEFAULT_CULTURE = "en-US"
+DEFAULT_GENDER  = "female"
+
+-- ============================================================
+-- DO NOT EDIT BELOW HERE
+-- ============================================================

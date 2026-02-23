@@ -1,0 +1,133 @@
+name: Build (Windows / MSVC)
+
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows Docker (MSVC)
+    runs-on: windows-2019
+
+    steps:
+      # --------------------------------------------------------
+      # 1. Checkout
+      # --------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --------------------------------------------------------
+      # 2. Switch Docker to Windows containers
+      # --------------------------------------------------------
+      - name: Switch Docker to Windows containers
+        shell: powershell
+        run: |
+          & "C:\Program Files\Docker\Docker\DockerCli.exe" -SwitchDaemon
+          # Wait until the daemon reports windows mode
+          $timeout = 60
+          $elapsed = 0
+          do {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
+            $os = docker version --format "{{.Server.Os}}" 2>$null
+          } while ($os -ne "windows" -and $elapsed -lt $timeout)
+          if ($os -ne "windows") {
+            throw "Docker daemon did not switch to Windows containers within $timeout seconds"
+          }
+          Write-Host "Docker daemon OS: $os"
+
+      # --------------------------------------------------------
+      # 3. Cache the deps Docker layer
+      #    Key is based on the Dockerfile.windows deps section.
+      #    The cache is stored as a tarball of the image layers.
+      # --------------------------------------------------------
+      - name: Restore Docker layer cache
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\docker-cache\houndtts-deps.tar
+          key: houndtts-deps-win-${{ hashFiles('Dockerfile.windows') }}
+
+      - name: Load cached deps image
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        shell: powershell
+        run: docker load -i C:\docker-cache\houndtts-deps.tar
+
+      # --------------------------------------------------------
+      # 4. Build the Docker image
+      #    --target output produces the final merged image.
+      # --------------------------------------------------------
+      - name: Build Docker image
+        shell: powershell
+        run: |
+          docker build `
+            -f Dockerfile.windows `
+            -t houndtts-builder-msvc `
+            --target output `
+            .
+
+      # --------------------------------------------------------
+      # 5. Save deps layer to cache (only on cache miss)
+      # --------------------------------------------------------
+      - name: Save deps image to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force C:\docker-cache | Out-Null
+          docker save houndtts-builder-msvc -o C:\docker-cache\houndtts-deps.tar
+
+      # --------------------------------------------------------
+      # 6. Extract dist from the container
+      # --------------------------------------------------------
+      - name: Extract dist
+        shell: powershell
+        run: |
+          $id = docker create houndtts-builder-msvc
+          try {
+            New-Item -ItemType Directory -Force dist | Out-Null
+            docker cp "${id}:C:\dist" .
+          } finally {
+            docker rm $id | Out-Null
+          }
+
+      # --------------------------------------------------------
+      # 7. Upload artifacts
+      # --------------------------------------------------------
+      - name: Upload dist/base
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoundTTS-windows
+          path: dist/base/
+          if-no-files-found: error
+
+      - name: Upload dist/piper-addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoundTTS-piper-addon-windows
+          path: dist/piper-addon/
+          if-no-files-found: error
+
+      # --------------------------------------------------------
+      # 8. Create GitHub Release (on tag push only)
+      # --------------------------------------------------------
+      - name: Zip release packages
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: |
+          Compress-Archive -Path dist\base\*         -DestinationPath HoundTTS-windows.zip         -Force
+          Compress-Archive -Path dist\piper-addon\*  -DestinationPath HoundTTS-piper-addon-windows.zip  -Force
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            HoundTTS-windows.zip
+            HoundTTS-piper-addon-windows.zip
+          generate_release_notes: true

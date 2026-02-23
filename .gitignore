@@ -1,0 +1,115 @@
+# C++ build artifacts
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.map
+*.dSYM/
+*.su
+*.idb
+*.pch
+*.tmp
+*.tlog
+*.lastbuildstate
+*.cache
+*.ipch
+
+# CMake build directories
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.vcxproj.filters
+*.sln.docstates
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# CLion
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+*.xcuserdata/
+DerivedData/
+
+# Qt Creator
+*.pro.user*
+*.qbs.user*
+*.moc
+*.qrc.depends
+
+# Debug files
+*.stackdump
+*.dmp
+
+# Logs
+*.log
+
+# Backup files
+*~
+*.bak
+*.backup
+*.orig
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Package files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Docker
+.dockerignore
+
+# vcpkg (Windows container build)
+vcpkg_installed/
+vcpkg/
+
+# MinGW specific
+*.a
+*.def
+
+# Windows specific
+*.exe.manifest
+
+# Lua compiled bytecode
+*.luac
+
+# DCS specific
+dcs/Mods/Services/HoundTTS/bin/HoundTTS.dll
+dist/
+release/

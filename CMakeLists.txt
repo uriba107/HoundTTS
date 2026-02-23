@@ -1,0 +1,135 @@
+cmake_minimum_required(VERSION 3.15)
+project(HoundTTS VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# --- Lua 5.1 headers & import library ---
+set(LUA_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include/lua")
+set(LUA_DLL         "${CMAKE_SOURCE_DIR}/lib/lua.dll")
+set(LUA_IMPLIB      "${CMAKE_SOURCE_DIR}/lib/lua.lib")
+
+# --- libopus ---
+# Provided by vcpkg x64-windows-static triplet
+set(OPUS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include/opus")
+find_package(Opus CONFIG REQUIRED)
+set(OPUS_TARGET Opus::opus)
+
+
+# Create imported Lua library target
+add_library(lua SHARED IMPORTED)
+set_target_properties(lua PROPERTIES
+    IMPORTED_LOCATION "${LUA_DLL}"
+    IMPORTED_IMPLIB   "${LUA_IMPLIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LUA_INCLUDE_DIR}"
+)
+
+# --- OpenSSL (for cpp-httplib HTTPS/WebSocket) ---
+# Provided by vcpkg x64-windows-static triplet
+find_package(OpenSSL REQUIRED)
+set(OPENSSL_SSL_LIB OpenSSL::SSL)
+set(OPENSSL_CRYPTO_LIB OpenSSL::Crypto)
+
+# --- HoundTTS DLL ---
+add_library(HoundTTS SHARED
+    # Core
+    src/dllmain.cpp
+    src/config_reader.cpp
+    src/process_launcher.cpp
+    src/opus_encoder.cpp
+    # Backends
+    src/backends/srs/srs_client.cpp
+    src/backends/srs/srs_backend.cpp
+    # Providers
+    src/providers/sapi/sapi_tts.cpp
+    src/providers/piper/piper_tts.cpp
+    src/providers/azure/azure_tts.cpp
+    src/providers/google/google_tts.cpp
+    src/providers/elevenlabs/elevenlabs_tts.cpp
+    src/providers/polly/polly_tts.cpp
+)
+
+target_include_directories(HoundTTS PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    "${CMAKE_SOURCE_DIR}/src"
+)
+
+target_compile_definitions(HoundTTS PRIVATE
+    LUA_BUILD_AS_DLL
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+    CPPHTTPLIB_OPENSSL_SUPPORT
+    HOUNDTTS_VERSION="${PROJECT_VERSION}"
+)
+
+# MSVC: static runtime (/MT), disable warnings that fire on Windows SDK headers
+if(MSVC)
+    target_compile_options(HoundTTS PRIVATE
+        /MT            # static CRT — self-contained DLL, no VCRUNTIME dependency
+        /W3            # reasonable warning level
+        /wd4996        # deprecation warnings from older SDK headers
+        /wd4267        # size_t → int narrowing in third-party headers
+    )
+endif()
+
+
+# MSVC: add Windows SDK include path so sapi.h / sphelper.h are found
+if(MSVC)
+    # The Windows SDK is on the include path automatically via vcvars64;
+    # this makes it explicit for IDEs that don't source vcvars.
+    if(DEFINED ENV{WindowsSdkDir} AND DEFINED ENV{WindowsSDKVersion})
+        target_include_directories(HoundTTS PRIVATE
+            "$ENV{WindowsSdkDir}Include\\$ENV{WindowsSDKVersion}um"
+            "$ENV{WindowsSdkDir}Include\\$ENV{WindowsSDKVersion}shared"
+        )
+    endif()
+endif()
+
+target_link_libraries(HoundTTS PRIVATE
+    lua
+    ${OPUS_TARGET}
+    ${OPENSSL_SSL_LIB}
+    ${OPENSSL_CRYPTO_LIB}
+    advapi32
+    winmm
+    ws2_32
+    ole32
+    oleaut32
+    crypt32
+)
+
+# MSVC: additional libs needed for SAPI COM and static OpenSSL
+if(MSVC)
+    target_link_libraries(HoundTTS PRIVATE
+        sapi          # SAPI 5.4 — present in Windows 11 SDK
+        user32
+        gdi32
+        bcrypt        # required by OpenSSL static on Windows
+    )
+endif()
+
+
+# MSVC: suppress default lib conflicts that arise from /MT + OpenSSL static
+if(MSVC)
+    target_link_options(HoundTTS PRIVATE
+        /NODEFAULTLIB:MSVCRT
+        /NODEFAULTLIB:MSVCRTD
+    )
+endif()
+
+# Output name: HoundTTS.dll
+set_target_properties(HoundTTS PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "HoundTTS"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# --- Install / dist ---
+install(TARGETS HoundTTS
+    RUNTIME DESTINATION .
+    LIBRARY DESTINATION .
+)
+install(DIRECTORY dcs/ DESTINATION dcs)
