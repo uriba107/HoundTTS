@@ -134,7 +134,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 # Stage 4: output — merge build + piper into final image
 # ============================================================
-FROM mcr.microsoft.com/windows/servercore:ltsc2019 AS output
+FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS output
 
 COPY --from=build C:\\dist\\base         C:\\dist\\base
 COPY --from=piper C:\\dist\\piper-addon  C:\\dist\\piper-addon
