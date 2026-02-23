@@ -113,3 +113,7 @@ vcpkg/
 dcs/Mods/Services/HoundTTS/bin/HoundTTS.dll
 dist/
 release/
+
+# Allow prebuilt libs needed by the build
+!lib/lua.dll
+!lib/opus.lib

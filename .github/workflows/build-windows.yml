@@ -2,10 +2,10 @@ name: Build (Windows / MSVC)
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main"]
     tags: ["v*"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -23,22 +23,15 @@ jobs:
           fetch-depth: 0
 
       # --------------------------------------------------------
-      # 2. Switch Docker to Windows containers
+      # 2. Verify Docker is running Windows containers
       # --------------------------------------------------------
-      - name: Switch Docker to Windows containers
+      - name: Verify Docker (Windows containers)
         shell: powershell
         run: |
-          & "C:\Program Files\Docker\Docker\DockerCli.exe" -SwitchDaemon
-          # Wait until the daemon reports windows mode
-          $timeout = 60
-          $elapsed = 0
-          do {
-            Start-Sleep -Seconds 3
-            $elapsed += 3
-            $os = docker version --format "{{.Server.Os}}" 2>$null
-          } while ($os -ne "windows" -and $elapsed -lt $timeout)
+          docker version
+          $os = docker version --format "{{.Server.Os}}"
           if ($os -ne "windows") {
-            throw "Docker daemon did not switch to Windows containers within $timeout seconds"
+            throw "Expected Windows containers but got: $os"
           }
           Write-Host "Docker daemon OS: $os"
 
@@ -67,6 +60,7 @@ jobs:
         shell: powershell
         run: |
           docker build `
+            --isolation=hyperv `
             -f Dockerfile.windows `
             -t houndtts-builder-msvc `
             --target output `
@@ -88,7 +82,7 @@ jobs:
       - name: Extract dist
         shell: powershell
         run: |
-          $id = docker create houndtts-builder-msvc
+          $id = docker create --isolation=hyperv houndtts-builder-msvc
           try {
             New-Item -ItemType Directory -Force dist | Out-Null
             docker cp "${id}:C:\dist" .
