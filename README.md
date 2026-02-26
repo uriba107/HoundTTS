@@ -26,7 +26,11 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 ### 1. Copy files
 
 Download the latest release from [GitHub releases](https://github.com/uriba107/HoundTTS/releases) and extract it into your DCS Saved Games folder (e.g. `%USERPROFILE%\Saved Games\DCS\`).
-Each release includes two archives: the required **base** package, and an optional **piper-addon** package that contains everything needed to run [Piper TTS](https://github.com/piper-tts-go/piper).
+
+Each release includes two archives:
+
+- **`HoundTTS-windows.zip`** — the full working package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started.**
+- **`HoundTTS-piper-addon-windows.zip`** — an optional add-on, as the name states. Contains only the [Piper TTS](https://github.com/piper-tts-go/piper) engine binaries and bundled voice models (~150 MB). Install this in addition to the base package if you want to use Piper TTS. On future updates you only need to re-download the base package — the piper add-on stays valid unless Piper itself is updated.
 
 > **Config files:** copy each `.example` file to the same name without `.example` and edit it. These files are never overwritten by updates — your live settings are safe.
 
