@@ -7,7 +7,7 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 - **No PowerShell overhead** — connects natively to SRS via direct TCP/UDP protocol
 - **No focus stealing** — all TTS synthesis runs in background threads, no visible windows
 - **Parallel calls** — each TTS request is fire-and-forget, no blocking
-- **Multiple TTS providers** — Piper (offline, bundled), SAPI (Windows system voices, no API key), Azure, Google, ElevenLabs
+- **Multiple TTS providers** — Piper (offline, bundled), SAPI (Windows system voices, no API key), Azure, Google, ElevenLabs, Kitten TTS (self-hosted)
 - **Credentials stay out of Lua** — API keys are read directly by the DLL from an INI file, never exposed in mission scripts or DCS logs
 - **Auto-detects SRS path** from the Windows registry — no manual path configuration needed
 
@@ -172,6 +172,36 @@ HoundTTS.Transmit("Cleared to land",
 )
 ```
 
+### Kitten TTS (self-hosted)
+
+Uses a locally-hosted [Kitten TTS Server](https://github.com/uriba107/Kitten-TTS-Server) instance over HTTP REST. **No cloud account or API key required.** Set the server URL in `HoundTTS-credentials.ini`.
+
+> **Download:** use the [uriba107/Kitten-TTS-Server](https://github.com/uriba107/Kitten-TTS-Server) fork — a maintained fork of the original project, updated to the latest Kitten TTS engine. Ready-made Docker images are available via `docker-compose.yaml` (no build required).
+
+> **Aliases:** `"kitten"`, `"kittentts"`, and `"kitten_tts"` are interchangeable.
+
+```lua
+HoundTTS.Transmit("Cleared to land",
+    { freqs = "251.0", coalition = 2 },
+    { provider = "kitten", voice = "Bella" }
+)
+```
+
+**Built-in voices:**
+
+| Voice    | Gender |
+| -------- | ------ |
+| `Bella`  | Female |
+| `Luna`   | Female |
+| `Rosie`  | Female |
+| `Kiki`   | Female |
+| `Jasper` | Male   |
+| `Bruno`  | Male   |
+| `Hugo`   | Male   |
+| `Leo`    | Male   |
+
+> **Speed default:** HoundTTS uses `1.1` as the default speed (matches the Kitten TTS UI default; the server's own default is slightly slower).
+
 ### ElevenLabs
 
 Requires an ElevenLabs API key set in `HoundTTS-credentials.ini`. The `voice` field is the ElevenLabs voice ID.
@@ -220,7 +250,7 @@ SRS_ENCRYPT          = false          -- global encryption default
 SRS_ENC_KEY          = 0             -- global encryption key
 
 DEFAULT_TRANSMITTER  = "srs"
-DEFAULT_PROVIDER     = "sapi"       -- "piper" | "sapi" | "azure" | "google" | "elevenlabs" | "polly"
+DEFAULT_PROVIDER     = "sapi"       -- "piper" | "sapi" | "azure" | "google" | "elevenlabs" | "polly" | "kitten"
 DEFAULT_VOICE        = ""            -- default voice/model name
 DEFAULT_CULTURE      = "en-US"       -- default culture/locale
 DEFAULT_GENDER       = "female"      -- "male" | "female"
@@ -264,6 +294,12 @@ region =
 api_key =
 ; Model ID (default: eleven_turbo_v2)
 model_id = eleven_turbo_v2
+
+[KittenTTS]
+; Full base URL of your Kitten TTS Server instance (https://github.com/uriba107/Kitten-TTS-Server)
+; Include scheme and port, no trailing slash.
+; Example: endpoint = http://192.168.10.30:8005
+endpoint =
 ```
 
 ## Usage (in mission scripts)
@@ -363,16 +399,16 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 
 **`provider_params`** (table) — which TTS provider to use:
 
-| Field    | Type   | Default                     | Description                                                                                                 |
-| -------- | ------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| provider | string | `HoundTTS.DEFAULT_PROVIDER` | `"piper"` / `"sapi"` (`"win"`) / `"azure"` / `"google"` (`"gcloud"`) / `"elevenlabs"` / `"polly"` (`"aws"`) |
-| voice    | string | `HoundTTS.DEFAULT_VOICE`    | Piper model name, SAPI voice name, Azure/Google/Polly voice name, or ElevenLabs voice ID                    |
-| speaker  | string | `""`                        | Piper multi-speaker model: speaker name or numeric ID                                                       |
-| engine   | string | `"standard"`                | Polly engine: `"standard"` / `"neural"` / `"generative"`                                                    |
-| culture  | string | `HoundTTS.DEFAULT_CULTURE`  | BCP-47 locale e.g. `"en-US"`, `"en-GB"` (used by SAPI, Azure, Google)                                       |
-| gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                |
-| speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                            |
-| volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                              |
+| Field    | Type   | Default                     | Description                                                                                                                                              |
+| -------- | ------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| provider | string | `HoundTTS.DEFAULT_PROVIDER` | `"piper"` / `"sapi"` (`"win"`) / `"azure"` / `"google"` (`"gcloud"`) / `"elevenlabs"` / `"polly"` (`"aws"`) / `"kitten"` (`"kittentts"`, `"kitten_tts"`) |
+| voice    | string | `HoundTTS.DEFAULT_VOICE`    | Piper model name, SAPI voice name, Azure/Google/Polly voice name, or ElevenLabs voice ID                                                                 |
+| speaker  | string | `""`                        | Piper multi-speaker model: speaker name or numeric ID                                                                                                    |
+| engine   | string | `"standard"`                | Polly engine: `"standard"` / `"neural"` / `"generative"`                                                                                                 |
+| culture  | string | `HoundTTS.DEFAULT_CULTURE`  | BCP-47 locale e.g. `"en-US"`, `"en-GB"` (used by SAPI, Azure, Google)                                                                                    |
+| gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                                                             |
+| speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                                                                         |
+| volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                                                                           |
 
 **Provider routing:**
 
@@ -384,6 +420,7 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 | `"srs"`       | `"google"`     | Direct SRS + Google Cloud TTS           |
 | `"srs"`       | `"elevenlabs"` | Direct SRS + ElevenLabs WebSocket       |
 | `"srs"`       | `"polly"`      | Direct SRS + AWS Polly                  |
+| `"srs"`       | `"kitten"`     | Direct SRS + Kitten TTS Server (HTTP)   |
 
 Returns: estimated speech time in seconds.
 
@@ -463,8 +500,10 @@ src/
     │   └── google_tts.*       # Google Cloud TTS REST API (OAuth2 service-account JWT via OpenSSL)
     ├── polly/
     │   └── polly_tts.*        # AWS Polly REST API
-    └── elevenlabs/
-        └── elevenlabs_tts.*   # ElevenLabs WebSocket streaming API
+    ├── elevenlabs/
+    │   └── elevenlabs_tts.*   # ElevenLabs WebSocket streaming API
+    └── kitten/
+        └── kitten_tts.*       # Kitten TTS Server HTTP REST API
 ```
 
 ## Building

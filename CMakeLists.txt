@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(HoundTTS VERSION 0.1.0 LANGUAGES CXX)
+project(HoundTTS VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,6 +48,7 @@ add_library(HoundTTS SHARED
     src/providers/google/google_tts.cpp
     src/providers/elevenlabs/elevenlabs_tts.cpp
     src/providers/polly/polly_tts.cpp
+    src/providers/kitten/kitten_tts.cpp
 )
 
 target_include_directories(HoundTTS PRIVATE

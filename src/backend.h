@@ -12,7 +12,7 @@ struct TTSRequest {
     // Routing
     std::string writedir;       // Saved Games\DCS\ — DLL locates credentials INI from here
     std::string transmitter;    // "srs" | "discord"
-    std::string provider;       // "piper" | "azure" | "google" | "elevenlabs" | "sapi"
+    std::string provider;       // "piper" | "azure" | "google" | "elevenlabs" | "sapi" | "kittentts" | "kitten_tts" | "kitten"
 
     // SRS / transmission
     int         srsPort = 5002;

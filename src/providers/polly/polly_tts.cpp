@@ -116,7 +116,7 @@ static std::string ComputeSigV4Auth(
         uri + "\n" +
         "\n" +                   // empty query string
         canonicalHeaders +       // already ends with '\n'
-        "\n" +                   // required blank line after headers
+        "\n" +                   // blank line required by SigV4 spec
         signedHeaders + "\n" +
         bodyHash;
 

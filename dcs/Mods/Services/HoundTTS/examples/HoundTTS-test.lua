@@ -181,6 +181,28 @@ local tests = {
       "Polly-auto",
       { provider = "polly", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
 
+    -- Kitten TTS (local/self-hosted neural TTS — https://github.com/devnen/Kitten-TTS-Server)
+    -- Requires [KittenTTS] endpoint in HoundTTS-credentials.ini.
+    -- Available voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+    { "KittenTTS warmup",
+      "Warmup.",
+      "Kitten-warmup",
+      { provider = "kittentts", voice = "Bella" } },
+    { "KittenTTS Bella",
+      "Kitten TTS. Bella voice. Neural text to speech.",
+      "Kitten-Bella",
+      { provider = "kittentts", voice = "Bella" } },
+
+    { "KittenTTS Hugo male",
+      "Kitten TTS. Hugo voice. Male neural voice.",
+      "Kitten-Hugo",
+      { provider = "kittentts", voice = "Hugo" } },
+
+    { "KittenTTS speed 1.3",
+      "Kitten TTS at one point three speed.",
+      "Kitten-fast",
+      { provider = "kittentts", voice = "Bella", speed = 1.3 } },
+
     -- Multi-frequency transmission
     { "Multi-frequency (251 + 305 AM)",
       "Transmitting on two frequencies at once.",

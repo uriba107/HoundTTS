@@ -168,10 +168,7 @@ function HoundTTS.Transmit(message, transmission_params, provider_params)
         }
     )
 
-    local speechTime = result or _dll.getSpeechTime(message, speed, provider)
-    env.info(string.format("[HoundTTS] Transmit freq=%s provider=%s speed=%s result=%s speechTime=%s msgLen=%d",
-        freqs, provider, tostring(speed), tostring(result), tostring(speechTime), #message))
-    return speechTime
+    return result or _dll.getSpeechTime(message, speed, provider)
 end
 
 -- -------------------------------------------------------------------------

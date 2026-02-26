@@ -12,7 +12,7 @@ namespace HoundTTS {
 // Estimate speech duration in seconds.
 // length:   character count (or string length)
 // speed:    rate value (interpretation depends on provider)
-// provider: "sapi", "google", "azure", "polly", "elevenlabs", "piper"
+// provider: "sapi", "google", "azure", "polly", "elevenlabs", "piper", "kittentts"
 inline double GetSpeechTime(int length, double speed = 1.0, const char* provider = "sapi") {
     double speedFactor = 1.0;
 
@@ -32,6 +32,9 @@ inline double GetSpeechTime(int length, double speed = 1.0, const char* provider
     } else if (std::strcmp(provider, "piper") == 0) {
         // Piper: speed is ignored by the engine
         speedFactor = 1.0;
+    } else if (std::strcmp(provider, "kittentts") == 0 || std::strcmp(provider, "kitten") == 0) {
+        // KittenTTS: direct speed multiplier (0.1–4.0)
+        speedFactor = std::max(0.1, std::min(4.0, speed));
     } else {
         // google, azure, polly: direct multiplier
         speedFactor = speed;

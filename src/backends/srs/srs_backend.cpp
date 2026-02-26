@@ -7,6 +7,7 @@
 #include "providers/google/google_tts.h"
 #include "providers/elevenlabs/elevenlabs_tts.h"
 #include "providers/polly/polly_tts.h"
+#include "providers/kitten/kitten_tts.h"
 #include "opus_encoder.h"
 #include "audio_queue.h"
 #include "config_reader.h"
@@ -63,6 +64,7 @@ bool SRSBackend::TransmitTTS(const TTSRequest& req) {
     std::string pollySecretKey  = cfg.GetPollySecretKey();
     std::string pollyRegion     = cfg.GetPollyRegion();
     std::string pollyEngine     = req.pollyEngine.empty() ? cfg.GetPollyEngine() : req.pollyEngine;
+    std::string kittenEndpoint  = cfg.GetKittenEndpoint();
 
     std::thread([host, port, freqs, message, provider, voice, speaker, gender, culture,
                  speed, volume, unitId, coalition, name,
@@ -70,7 +72,8 @@ bool SRSBackend::TransmitTTS(const TTSRequest& req) {
                  azureKey, azureRegion,
                  googleCreds,
                  elevenLabsKey, elevenLabsModel,
-                 pollyAccessKey, pollySecretKey, pollyRegion, pollyEngine]() {
+                 pollyAccessKey, pollySecretKey, pollyRegion, pollyEngine,
+                 kittenEndpoint]() {
 
         auto queue = std::make_shared<AudioQueue>();
 
@@ -133,6 +136,13 @@ bool SRSBackend::TransmitTTS(const TTSRequest& req) {
             PollyTTS::SynthesizeToQueue(message, pollyAccessKey, pollySecretKey,
                                         pollyRegion, voice, pollyEngine,
                                         culture, gender, speed, volume, *queue);
+
+        } else if (provider == "kittentts" || provider == "kitten_tts" || provider == "kitten") {
+            // Single-shot HTTP POST — must complete before SRS client starts
+            // Default speed 1.1 matches the KittenTTS UI default (server default is too slow)
+            double kittenSpeed = (speed <= 0.0) ? 1.1 : speed;
+            KittenTTS::SynthesizeToQueue(message, kittenEndpoint,
+                                         voice, culture, kittenSpeed, volume, *queue);
 
         } else if (message == "__test_tone__") {
             // Test tone: 440Hz sine at 16kHz, duration = speed (seconds)

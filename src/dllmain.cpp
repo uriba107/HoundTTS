@@ -86,7 +86,7 @@ int l_init(lua_State* L) {
 //   .encKey       number
 //   .lat/.lon/.alt numbers (pre-converted by Lua)
 // ep      : table — provider parameters
-//   .provider     "piper" | "azure" | "google" | "elevenlabs" | "polly" | "sapi"
+//   .provider     "piper" | "azure" | "google" | "elevenlabs" | "polly" | "sapi" | "kittentts" 
 //   .voice        string
 //   .speaker      string  (piper multi-speaker only)
 //   .culture      string  e.g. "en-US"
@@ -146,6 +146,7 @@ int l_textToSpeech(lua_State* L) {
     double speed = req.speed;
     if (speed <= -999.0) {
         speed = (provider == "sapi" || provider == "win" || provider.empty()) ? 0.0 : 1.0;
+        // kittentts uses 1.0 multiplier (already covered by the else branch above)
     }
     double speechTime = HoundTTS::GetSpeechTime(
         static_cast<int>(req.message.size()), speed, provider.c_str());

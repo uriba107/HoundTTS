@@ -87,6 +87,8 @@ void ConfigReader::ParseIni(const std::string& content) {
         } else if (section == "ElevenLabs") {
             if (key == "api_key")  elevenLabsKey_     = val;
             if (key == "model_id") elevenLabsModelId_ = val;
+        } else if (section == "KittenTTS") {
+            if (key == "endpoint") kittenEndpoint_ = val;
         } else if (section == "Polly") {
             if (key == "access_key") pollyAccessKey_ = val;
             if (key == "secret_key") pollySecretKey_ = val;
@@ -147,6 +149,10 @@ std::string ConfigReader::GetElevenLabsKey() const {
 std::string ConfigReader::GetElevenLabsModelId() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return elevenLabsModelId_;
+}
+std::string ConfigReader::GetKittenEndpoint() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return kittenEndpoint_;
 }
 std::string ConfigReader::GetPollyAccessKey() const {
     std::lock_guard<std::mutex> lock(mutex_);

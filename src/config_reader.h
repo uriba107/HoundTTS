@@ -34,6 +34,9 @@ public:
     std::string GetElevenLabsKey() const;
     std::string GetElevenLabsModelId() const;
 
+    // [KittenTTS]
+    std::string GetKittenEndpoint() const;
+
     // [Polly]
     std::string GetPollyAccessKey() const;
     std::string GetPollySecretKey() const;
@@ -65,6 +68,7 @@ private:
     std::string azureRegion_;
     std::string elevenLabsKey_;
     std::string elevenLabsModelId_;
+    std::string kittenEndpoint_;
     std::string pollyAccessKey_;
     std::string pollySecretKey_;
     std::string pollyRegion_;
