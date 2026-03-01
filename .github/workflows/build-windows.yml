@@ -23,7 +23,28 @@ jobs:
           fetch-depth: 0
 
       # --------------------------------------------------------
-      # 2. Verify Docker is running Windows containers
+      # 2a. Start Docker daemon (workaround: actions/runner-images#13729)
+      # --------------------------------------------------------
+      - name: Start Docker service
+        shell: powershell
+        run: |
+          Start-Service docker
+          # Wait until the daemon is responsive (up to 60 s)
+          $timeout = 60
+          $timer = [Diagnostics.Stopwatch]::StartNew()
+          while ($timer.Elapsed.TotalSeconds -lt $timeout) {
+            try {
+              docker version | Out-Null
+              Write-Host "Docker daemon is ready."
+              return
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          throw "Docker daemon did not start within $timeout seconds."
+
+      # --------------------------------------------------------
+      # 2b. Verify Docker is running Windows containers
       # --------------------------------------------------------
       - name: Verify Docker (Windows containers)
         shell: powershell
