@@ -8,10 +8,14 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Windows Docker (MSVC)
     runs-on: windows-2022
+    timeout-minutes: 120
 
     steps:
       # --------------------------------------------------------
@@ -73,6 +77,18 @@ jobs:
         shell: powershell
         run: docker load -i C:\docker-cache\houndtts-deps.tar
 
+      # Build deps stage only (used for caching)
+      - name: Build deps stage
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        shell: powershell
+        run: |
+          docker build `
+            --isolation=hyperv `
+            -f Dockerfile.windows `
+            -t houndtts-deps `
+            --target deps `
+            .
+
       # --------------------------------------------------------
       # 4. Build the Docker image
       #    --target output produces the final merged image.
@@ -95,7 +111,7 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force C:\docker-cache | Out-Null
-          docker save houndtts-builder-msvc -o C:\docker-cache\houndtts-deps.tar
+          docker save houndtts-deps -o C:\docker-cache\houndtts-deps.tar
 
       # --------------------------------------------------------
       # 6. Extract dist from the container
@@ -147,7 +163,3 @@ jobs:
             HoundTTS-piper-addon-windows.zip
           generate_release_notes: true
           draft: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      
