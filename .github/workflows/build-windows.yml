@@ -90,8 +90,23 @@ jobs:
             .
 
       # --------------------------------------------------------
-      # 4. Build the Docker image
-      #    --target output produces the final merged image.
+      # 4a. Derive version from git tag (v1.2.3 → 1.2.3)
+      # --------------------------------------------------------
+      - name: Derive version from tag
+        id: version
+        shell: powershell
+        run: |
+          if ("${{ github.ref }}" -match '^refs/tags/v(.+)$') {
+            $ver = $Matches[1]
+          } else {
+            $ver = "0.0.0"
+          }
+          Write-Host "Version: $ver"
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+
+      # --------------------------------------------------------
+      # 4b. Build the Docker image
+      #     --target output produces the final merged image.
       # --------------------------------------------------------
       - name: Build Docker image
         shell: powershell
@@ -101,6 +116,7 @@ jobs:
             -f Dockerfile.windows `
             -t houndtts-builder-msvc `
             --target output `
+            --build-arg HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }} `
             .
 
       # --------------------------------------------------------

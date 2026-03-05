@@ -94,6 +94,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 #           Rebuilds fast on code changes; deps layer is cached
 # ============================================================
 FROM deps AS build
+ARG HOUNDTTS_VERSION=0.0.0
 
 WORKDIR C:\\src
 COPY . C:\\src\\
@@ -110,7 +111,8 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
       -G "NMake Makefiles" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake \
-      -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      -DVCPKG_TARGET_TRIPLET=x64-windows-static \
+      -DHOUNDTTS_VERSION_OVERRIDE=%HOUNDTTS_VERSION%
 
 # Compile
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \

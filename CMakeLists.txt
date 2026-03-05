@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
-project(HoundTTS VERSION 0.1.1 LANGUAGES CXX)
+
+# Allow CI to inject version via -DHOUNDTTS_VERSION_OVERRIDE=x.y.z
+set(HOUNDTTS_VERSION_OVERRIDE "" CACHE STRING "Override project version (set by CI from git tag)")
+
+if(HOUNDTTS_VERSION_OVERRIDE)
+    project(HoundTTS VERSION ${HOUNDTTS_VERSION_OVERRIDE} LANGUAGES CXX)
+else()
+    project(HoundTTS VERSION 0.0.0 LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
