@@ -39,8 +39,16 @@ find_package(OpenSSL REQUIRED)
 set(OPENSSL_SSL_LIB OpenSSL::SSL)
 set(OPENSSL_CRYPTO_LIB OpenSSL::Crypto)
 
+# --- Version resource (right-click → Properties → Details) ---
+configure_file(
+    "${CMAKE_SOURCE_DIR}/src/version.rc.in"
+    "${CMAKE_BINARY_DIR}/version.rc"
+    @ONLY
+)
+
 # --- HoundTTS DLL ---
 add_library(HoundTTS SHARED
+    ${CMAKE_BINARY_DIR}/version.rc
     # Core
     src/dllmain.cpp
     src/config_reader.cpp
