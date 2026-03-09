@@ -5,6 +5,18 @@
 -- Install: add this line to MissionScripting.lua before the sanitizeModule block:
 --   dofile(lfs.writedir()..[[Mods\Services\HoundTTS\Scripts\HoundTTS-mission.lua]])
 
+-- Guard: all four globals must be available. On sanitized servers loaded via the
+-- hook's pcall(dofile,...), this produces a clear error in dcs.log instead of a
+-- silent nil-index crash somewhere deeper in the script.
+if not (require and lfs and io and package) then
+    env.error("[HoundTTS] Mission scripting environment is sanitized "..
+        "(require/lfs/io/package unavailable). HoundTTS cannot load. "..
+        "Install DCSServerBot (desanitizes automatically) or add "..
+        "dofile(lfs.writedir()..[[Mods\\Services\\HoundTTS\\Scripts\\HoundTTS-mission.lua]]) "..
+        "to MissionScripting.lua before the sanitizeModule block.")
+    return
+end
+
 if not HoundTTS then
     HoundTTS = {}
 end

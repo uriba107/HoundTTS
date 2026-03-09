@@ -61,7 +61,17 @@ Saved Games\DCS\
 
 ### 2. Prepare DCS
 
-Add the following line to `MissionScripting.lua` (in the DCS World install folder at `Scripts\MissionScripting.lua`).
+**HoundTTS detects the environment automatically** and picks the right load path:
+
+#### Option A — Desanitized server (recommended, zero extra steps)
+
+If your server runs **DCSServerBot**, **DCS-gRPC**, or anything else that desanitizes `MissionScripting.lua` (i.e. `require`, `lfs`, `io`, `package` are available in the mission env), HoundTTS loads itself automatically on every mission start via its hook script. Nothing else to do.
+
+> DCSServerBot desanitizes the env by default. If you have it installed and its `desanitize` option is not set to `false`, you are already covered.
+
+#### Option B — Vanilla DCS (sanitized, manual step required)
+
+On a stock DCS install with no desanitization, add one line to `MissionScripting.lua` (in the DCS World install folder at `Scripts\MissionScripting.lua`):
 
 ```diff
   --Initialization script for the Mission lua Environment (SSE)
@@ -73,6 +83,8 @@ Add the following line to `MissionScripting.lua` (in the DCS World install folde
 ```
 
 The line **must** appear before the `sanitizeModule` block so that `require`, `package`, and `lfs` are still available when the script runs.
+
+> If neither path is active, HoundTTS logs a warning in `dcs.log` with instructions.
 
 ## TTS Providers
 
