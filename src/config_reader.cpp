@@ -89,11 +89,19 @@ void ConfigReader::ParseIni(const std::string& content) {
             if (key == "model_id") elevenLabsModelId_ = val;
         } else if (section == "KittenTTS") {
             if (key == "endpoint") kittenEndpoint_ = val;
-        } else if (section == "Polly") {
-            if (key == "access_key") pollyAccessKey_ = val;
-            if (key == "secret_key") pollySecretKey_ = val;
-            if (key == "region")     pollyRegion_    = val;
-            if (key == "engine")     pollyEngine_    = val;
+        } else if (section == "OpenAI") {
+            if (key == "api_key")  openaiKey_      = val;
+            if (key == "endpoint") openaiEndpoint_ = val;
+            if (key == "model")    openaiModel_    = val;
+            if (key == "chat_model") openaiChatModel_ = val;
+        } else if (section == "AWS") {
+            if (key == "access_key") awsAccessKey_   = val;
+            if (key == "secret_key") awsSecretKey_   = val;
+            if (key == "region")     awsRegion_      = val;
+            if (key == "engine")     awsPollyEngine_ = val;
+        } else if (section == "LibreTranslate") {
+            if (key == "endpoint") libreTranslateEndpoint_ = val;
+            if (key == "api_key")  libreTranslateApiKey_  = val;
         } else if (section == "Discord") {
             if (key == "bot_token") discordToken_ = val;
         } else if (section == "General") {
@@ -103,7 +111,11 @@ void ConfigReader::ParseIni(const std::string& content) {
 
     // Apply defaults for blank values
     if (elevenLabsModelId_.empty()) elevenLabsModelId_ = "eleven_turbo_v2";
-    if (pollyEngine_.empty())        pollyEngine_       = "neural";
+    if (awsPollyEngine_.empty())     awsPollyEngine_    = "neural";
+    if (openaiEndpoint_.empty())     openaiEndpoint_    = "https://api.openai.com";
+    if (openaiModel_.empty())        openaiModel_       = "tts-1";
+    if (openaiChatModel_.empty())    openaiChatModel_   = "gpt-4o-mini";
+    if (libreTranslateEndpoint_.empty()) libreTranslateEndpoint_ = "http://localhost:5000";
 
     // Bundled piper defaults (relative to writedir)
     if (piperExe_.empty()) {
@@ -154,25 +166,49 @@ std::string ConfigReader::GetKittenEndpoint() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return kittenEndpoint_;
 }
-std::string ConfigReader::GetPollyAccessKey() const {
+std::string ConfigReader::GetOpenAIKey() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return pollyAccessKey_;
+    return openaiKey_;
 }
-std::string ConfigReader::GetPollySecretKey() const {
+std::string ConfigReader::GetOpenAIEndpoint() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return pollySecretKey_;
+    return openaiEndpoint_;
 }
-std::string ConfigReader::GetPollyRegion() const {
+std::string ConfigReader::GetOpenAIModel() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return pollyRegion_;
+    return openaiModel_;
 }
-std::string ConfigReader::GetPollyEngine() const {
+std::string ConfigReader::GetOpenAIChatModel() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return pollyEngine_;
+    return openaiChatModel_;
+}
+std::string ConfigReader::GetAwsAccessKey() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return awsAccessKey_;
+}
+std::string ConfigReader::GetAwsSecretKey() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return awsSecretKey_;
+}
+std::string ConfigReader::GetAwsRegion() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return awsRegion_;
+}
+std::string ConfigReader::GetAwsPollyEngine() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return awsPollyEngine_;
 }
 std::string ConfigReader::GetDiscordToken() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return discordToken_;
+}
+std::string ConfigReader::GetLibreTranslateEndpoint() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return libreTranslateEndpoint_;
+}
+std::string ConfigReader::GetLibreTranslateApiKey() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return libreTranslateApiKey_;
 }
 std::string ConfigReader::GetLogLevel() const {
     std::lock_guard<std::mutex> lock(mutex_);

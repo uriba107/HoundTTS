@@ -6,16 +6,36 @@
 #include <string>
 #include <fstream>
 #include <mutex>
+#include <deque>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <memory>
 #include <windows.h>
 
 namespace HoundTTS {
 
 // ---------------------------------------------------------------------------
-// Central logger — writes to <writedir>Logs\HoundTTS.log
+// Async logger — never blocks callers on file I/O.
+//
+//  OutputDebugStringA  — called directly by caller (always, lock-free).
+//  Queue push          — mutex held only for deque::push_back (microseconds).
+//  File write          — handled by a dedicated background writer thread.
+//
 // Call Logger::Init(writedir) once at startup (from l_init).
-// Call Logger::Log(tag, msg) from any thread.
+// Call Error/Info/Debug from any thread — they return almost instantly.
 // ---------------------------------------------------------------------------
-enum class LogLevel { LEVEL_ERROR = 0, LEVEL_INFO = 1 };
+enum class LogLevel { LEVEL_ERROR = 0, LEVEL_INFO = 1, LEVEL_DEBUG = 2 };
+
+// Shared state between Logger and the writer thread.
+// Prevent use-after-free on DLL unload via shared_ptr ownership.
+struct LogQueue {
+    std::mutex              mu;
+    std::condition_variable cv;
+    std::deque<std::string> entries;
+    std::atomic<bool>       alive{true};
+    std::string             logPath;   // set once in Init, read-only after
+};
 
 class Logger {
 public:
@@ -25,48 +45,92 @@ public:
     }
 
     void Init(const std::string& writedir) {
-        std::lock_guard<std::mutex> lk(mutex_);
         if (writedir.empty()) return;
         std::string path = writedir;
         if (path.back() != '\\' && path.back() != '/') path += '\\';
         path += "Logs\\HoundTTS.log";
-        logPath_ = path;
+
+        auto q = std::make_shared<LogQueue>();
+        q->logPath = path;
+        q->alive.store(true);
+        queue_ = q;
+
+        // Writer thread owns a shared_ptr — state survives even if
+        // Logger is destroyed first (DLL unload order).
+        std::thread([q]() {
+            while (q->alive.load()) {
+                std::deque<std::string> batch;
+                {
+                    std::unique_lock<std::mutex> lk(q->mu);
+                    q->cv.wait_for(lk, std::chrono::milliseconds(100),
+                        [&] { return !q->entries.empty() || !q->alive.load(); });
+                    batch.swap(q->entries);
+                }
+                if (!batch.empty()) {
+                    std::ofstream f(q->logPath, std::ios::app);
+                    if (f) for (auto& line : batch) f << line;
+                }
+            }
+            // Final flush after shutdown
+            std::deque<std::string> tail;
+            {
+                std::lock_guard<std::mutex> lk(q->mu);
+                tail.swap(q->entries);
+            }
+            if (!tail.empty()) {
+                std::ofstream f(q->logPath, std::ios::app);
+                if (f) for (auto& line : tail) f << line;
+            }
+        }).detach();
     }
 
-    void SetLevel(LogLevel level) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        level_ = level;
-    }
+    void SetLevel(LogLevel level) { level_.store(level); }
 
     void Error(const std::string& tag, const std::string& msg) {
-        Write_(tag, "ERROR", msg);
+        Emit(tag, "ERROR", msg);
+    }
+    void Info(const std::string& tag, const std::string& msg) {
+        if (level_.load(std::memory_order_relaxed) < LogLevel::LEVEL_INFO) return;
+        Emit(tag, "INFO", msg);
+    }
+    void Debug(const std::string& tag, const std::string& msg) {
+        if (level_.load(std::memory_order_relaxed) < LogLevel::LEVEL_DEBUG) return;
+        Emit(tag, "DEBUG", msg);
     }
 
-    void Info(const std::string& tag, const std::string& msg) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        if (level_ < LogLevel::LEVEL_INFO) return;
-        Write_Unlocked(tag, "INFO", msg);
+    ~Logger() {
+        auto q = queue_;
+        if (q) {
+            q->alive.store(false);
+            q->cv.notify_one();
+        }
+        // Don't join — writer thread holds its own shared_ptr and will
+        // flush + exit on its own.  Joining inside a static destructor
+        // on Windows risks loader-lock deadlock.
     }
 
 private:
     Logger() = default;
+    Logger(const Logger&) = delete;
+    Logger& operator=(const Logger&) = delete;
 
-    void Write_(const std::string& tag, const std::string& level, const std::string& msg) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        Write_Unlocked(tag, level, msg);
-    }
-
-    void Write_Unlocked(const std::string& tag, const std::string& level, const std::string& msg) {
+    void Emit(const std::string& tag, const std::string& level,
+              const std::string& msg) {
         std::string line = "[" + tag + "] " + level + ": " + msg + "\n";
+        // Lock-free — always visible in DebugView / attached debugger
         OutputDebugStringA(line.c_str());
-        if (logPath_.empty()) return;
-        std::ofstream f(logPath_, std::ios::app);
-        if (f) f << line;
+        // Enqueue for file write (fast: only a deque push under lock)
+        auto q = queue_;
+        if (!q || !q->alive.load()) return;
+        {
+            std::lock_guard<std::mutex> lk(q->mu);
+            q->entries.push_back(std::move(line));
+        }
+        q->cv.notify_one();
     }
 
-    std::mutex  mutex_;
-    std::string logPath_;
-    LogLevel    level_ = LogLevel::LEVEL_ERROR;
+    std::shared_ptr<LogQueue> queue_;
+    std::atomic<LogLevel>     level_{LogLevel::LEVEL_ERROR};
 };
 
 namespace Utils {

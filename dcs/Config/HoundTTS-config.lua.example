@@ -21,7 +21,7 @@ DEFAULT_TRANSMITTER = "srs"
 --   "azure"       — Azure Cognitive Services Speech (API key required)
 --   "google"      — Google Cloud Text-to-Speech (API key required)
 --   "elevenlabs"  — ElevenLabs (API key required)
---   "polly"       — Amazon Polly (API key required)
+--   "aws"         — Amazon Polly TTS / Amazon Translate (API key required; "polly" also accepted)
 DEFAULT_PROVIDER = "sapi"
 
 -- Default voice / style (can be overridden per-call in provider_params)
@@ -29,7 +29,7 @@ DEFAULT_PROVIDER = "sapi"
 -- For "elevenlabs": ElevenLabs voice ID (can also be set per-call)
 -- For "azure":      Azure voice name e.g. "en-US-AriaNeural"
 -- For "google":     Google voice name e.g. "en-GB-Neural2-A"
--- For "polly":      Polly VoiceId e.g. "Joanna" (auto-selected from culture+gender if blank)
+-- For "aws":        Polly VoiceId e.g. "Joanna" (auto-selected from culture+gender if blank)
 DEFAULT_VOICE   = ""
 -- Default Piper speaker name or integer ID for multi-speaker models.
 -- Leave blank to use the model's default speaker.

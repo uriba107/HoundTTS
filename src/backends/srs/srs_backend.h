@@ -7,16 +7,17 @@
 
 namespace HoundTTS {
 
-// ITTSBackend implementation that transmits directly over the SRS protocol.
-// Phase 2: SAPI synthesize-all -> Opus encode -> SRS UDP stream.
-// Phase 3 (future): Piper streaming path added here.
+// ITTSBackend implementation that transmits over the SRS protocol.
+// Receives 16kHz mono PCM from the shared TTSPipeline, Opus-encodes it,
+// then streams over the SRS TCP/UDP protocol.
 class SRSBackend : public ITTSBackend {
 public:
     SRSBackend() = default;
     ~SRSBackend() override = default;
 
     // Non-blocking: spawns a detached thread and returns immediately.
-    bool TransmitTTS(const TTSRequest& req) override;
+    bool Transmit(std::shared_ptr<PCMQueue> pcm,
+                  const TransmitParams& params) override;
 };
 
 } // namespace HoundTTS

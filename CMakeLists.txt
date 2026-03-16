@@ -51,20 +51,33 @@ add_library(HoundTTS SHARED
     ${CMAKE_BINARY_DIR}/version.rc
     # Core
     src/dllmain.cpp
+    src/lua_tts.cpp
+    src/lua_translate.cpp
+    src/tts_pipeline.cpp
     src/config_reader.cpp
     src/process_launcher.cpp
-    src/opus_encoder.cpp
+    src/backends/codecs/opus_encoder.cpp
     # Backends
     src/backends/srs/srs_client.cpp
     src/backends/srs/srs_backend.cpp
-    # Providers
-    src/providers/sapi/sapi_tts.cpp
-    src/providers/piper/piper_tts.cpp
-    src/providers/azure/azure_tts.cpp
-    src/providers/google/google_tts.cpp
-    src/providers/elevenlabs/elevenlabs_tts.cpp
-    src/providers/polly/polly_tts.cpp
-    src/providers/kitten/kitten_tts.cpp
+    # Shared auth helpers
+    src/providers/shared/google/google_auth.cpp
+    src/providers/shared/aws/aws_auth.cpp
+    # TTS providers
+    src/providers/tts/sapi/sapi_tts.cpp
+    src/providers/tts/piper/piper_tts.cpp
+    src/providers/tts/azure/azure_tts.cpp
+    src/providers/tts/google/google_tts.cpp
+    src/providers/tts/elevenlabs/elevenlabs_tts.cpp
+    src/providers/tts/aws/aws_tts.cpp
+    src/providers/tts/kitten/kitten_tts.cpp
+    src/providers/tts/openai/openai_tts.cpp
+    # Translation providers
+    src/providers/translate/openai/openai_chat.cpp
+    src/providers/translate/google/google_translate.cpp
+    src/providers/translate/libretranslate/libretranslate.cpp
+    src/providers/translate/aws/aws_translate.cpp
+    src/providers/translate/azure/azure_translate.cpp
 )
 
 target_include_directories(HoundTTS PRIVATE

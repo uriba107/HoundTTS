@@ -81,6 +81,10 @@ end
 _dll.init(lfs.writedir())
 env.info("[HoundTTS] HoundTTS.dll v" .. (_dll.version or "unknown") .. " loaded, writedir: " .. lfs.writedir())
 
+-- Keep a direct reference to the raw DLL getSpeechTime before the Lua
+-- wrapper below overwrites it in the same table (_dll == HoundTTS).
+local _dll_getSpeechTime = _dll.getSpeechTime
+
 -- -------------------------------------------------------------------------
 -- Public API
 -- -------------------------------------------------------------------------
@@ -89,14 +93,31 @@ function HoundTTS.round(x, n)
     return math.floor(x * p + 0.5) / p
 end
 
-function HoundTTS.getSpeechTime(length, speed, googleTTS)
+function HoundTTS.getSpeechTime(length, speed, providerOrGoogleTTS)
     if type(length) == "string" then length = #length end
-    local provider = googleTTS and "google" or "sapi"
-    return _dll.getSpeechTime(length, speed or 1, provider)
+    local provider
+    if type(providerOrGoogleTTS) == "string" then
+        provider = providerOrGoogleTTS
+    elseif providerOrGoogleTTS then
+        provider = "google"
+    else
+        provider = "sapi"
+    end
+    local result = _dll_getSpeechTime(length, speed or 1, provider)
+    return result
 end
 
 -- -------------------------------------------------------------------------
--- HoundTTS.Transmit(message, transmission_params, provider_params)
+-- HoundTTS.Transmit(message, transmission_params, provider_params [, translation_params])
+--
+-- translation_params (table, optional):
+--   .provider         "openai" | "google" | "libretranslate" | "aws" | "azure" (omit to skip translation)
+--   .language         string  ISO 639-1 target code e.g. "de", "fr", "ru"
+--   .source_language  string  ISO 639-1 source code (default: "en")
+--
+--   When provided, the message is translated BEFORE being sent to the TTS engine.
+--   The entire translate → TTS → SRS pipeline runs on a background thread.
+--   On translation failure, the original (untranslated) message is spoken.
 --
 -- transmission_params (table):
 --   .transmitter  "srs" (default) | "discord"
@@ -111,7 +132,7 @@ end
 --   .port         number  SRS port override
 --
 -- provider_params (table):
---   .provider     "piper" | "azure" | "google" | "elevenlabs" | "sapi" | "polly"
+--   .provider     "piper" | "azure" | "google" | "elevenlabs" | "aws" | "polly" | "sapi" | "openai" | "kitten"/"kittentts" (deprecated — use "openai")
 --   .voice        string  Piper model name OR ElevenLabs/Azure/Google/Polly voice ID
 --   .speaker      string  Piper speaker name or integer ID (multi-speaker models only)
 --   .culture      string  e.g. "en-US"
@@ -120,9 +141,10 @@ end
 --   .engine       string  Polly only: "standard" | "neural" | "long-form" (overrides INI default)
 --   .volume       number  0.0–1.0
 -- -------------------------------------------------------------------------
-function HoundTTS.Transmit(message, transmission_params, provider_params)
+function HoundTTS.Transmit(message, transmission_params, provider_params, translation_params)
     local tp = transmission_params or {}
     local ep = provider_params     or {}
+    local xl = translation_params  or {}
 
     local transmitter = tp.transmitter or HoundTTS.DEFAULT_TRANSMITTER
     local freqs       = tostring(tp.freqs       or tp.freq       or "251.0")
@@ -177,10 +199,15 @@ function HoundTTS.Transmit(message, transmission_params, provider_params)
             speed       = speed,
             engine      = engine,
             volume      = volume
+        },
+        {
+            provider        = xl.provider or "",
+            language        = xl.language or "",
+            source_language = xl.source_language or "en",
         }
     )
 
-    return result or _dll.getSpeechTime(message, speed, provider)
+    return result or _dll_getSpeechTime(message, speed, provider)
 end
 
 -- -------------------------------------------------------------------------
@@ -239,7 +266,69 @@ function HoundTTS.TextToSpeech(message, freqs, modulations, volume, name,
         }
     )
 
-    return result or _dll.getSpeechTime(message, speed, provider)
+    return result or _dll_getSpeechTime(message, speed, provider)
+end
+
+-- -------------------------------------------------------------------------
+-- HoundTTS.Translate(message, provider_params, callback)
+--
+-- message : string — text to translate
+--
+-- provider_params (table):
+--   .provider     "openai" (future: "google")
+--   .language         string   ISO 639-1 target code e.g. "de", "fr", "ru" (or full name e.g. "German")
+--   .source_language  string   ISO 639-1 source code (default: "en"). LibreTranslate only.
+--
+-- callback : function(translated, err)
+--   Called asynchronously when the translation completes.
+--   On success:  callback(translated_string, nil)
+--   On failure:  callback(nil, error_string)
+--
+-- The function returns immediately (non-blocking). The HTTP request to the
+-- LLM runs on a DLL background thread. A timer polls for the result every
+-- 0.5 seconds and invokes the callback when ready.
+-- -------------------------------------------------------------------------
+function HoundTTS.Translate(message, provider_params, callback)
+    if type(callback) ~= "function" then
+        env.error("[HoundTTS] Translate requires a callback function as the 3rd argument")
+        return
+    end
+
+    local ep = provider_params or {}
+    local provider        = ep.provider or "openai"
+    local language        = ep.language or "en"
+    local source_language = ep.source_language or "en"
+
+    local id, err = _dll.translateAsync(message, {
+        provider        = provider,
+        language        = language,
+        source_language = source_language,
+    })
+
+    if id == nil then
+        -- Provider validation failed synchronously
+        callback(nil, err or "Failed to start translation")
+        return
+    end
+
+    -- Poll every 0.5s until the background thread finishes
+    local function poll(_, t)
+        local result, pollErr = _dll.getTranslationResult(id)
+        if result ~= nil then
+            -- Got a translated string
+            callback(result, nil)
+            return nil   -- stop polling
+        end
+        if pollErr ~= nil then
+            -- Done with error
+            callback(nil, pollErr)
+            return nil   -- stop polling
+        end
+        -- Still pending — check again in 0.5s
+        return t + 0.5
+    end
+
+    timer.scheduleFunction(poll, nil, timer.getTime() + 0.5)
 end
 
 -- -------------------------------------------------------------------------

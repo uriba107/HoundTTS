@@ -18,7 +18,54 @@
 local TEST_FREQ      = "251.0"
 local TEST_MOD       = "AM"
 local TEST_COALITION = 2
-local GAP            = 12   -- seconds between tests
+local GAP            = 6    -- seconds between tests (overlap is fine)
+
+-- ============================================================
+-- Providers to test — comment out any provider to skip it.
+-- The test tone and "special" entries always run regardless.
+-- ============================================================
+local TTS_PROVIDERS_TO_TEST = {
+    "sapi",
+    "piper",
+    "azure",
+    "google",
+    "elevenlabs",
+    "aws",
+    "openai",
+    "kittentts",
+}
+
+local TRANSLATION_PROVIDERS_TO_TEST = {
+    "google",
+    "libretranslate",
+    "openai",
+}
+
+-- Build a quick lookup set from the list above
+local _providerEnabled = {}
+for _, p in ipairs(TTS_PROVIDERS_TO_TEST) do
+    _providerEnabled[p] = true
+end
+
+-- Build a quick lookup set for translation providers
+local _translationProviderEnabled = {}
+for _, p in ipairs(TRANSLATION_PROVIDERS_TO_TEST) do
+    _translationProviderEnabled[p] = true
+end
+
+local function providerEnabled(ep)
+    if type(ep) ~= "table" then return true end   -- tone / special entries
+    local p = ep.provider
+    if type(p) ~= "string" then return true end
+    return _providerEnabled[p] == true
+end
+
+local function translationProviderEnabled(pp)
+    if type(pp) ~= "table" then return true end
+    local p = pp.provider
+    if type(p) ~= "string" then return true end
+    return _translationProviderEnabled[p] == true
+end
 
 -- Helper: schedule a function call after `delay` seconds
 local function after(delay, fn)
@@ -26,10 +73,10 @@ local function after(delay, fn)
 end
 
 -- Helper: fire one Transmit call and log it
-local function runTest(label, message, tp, ep)
+local function runTest(label, message, tp, ep, xl)
     env.info("[HoundTTS-test] " .. label)
     local ok, err = pcall(function()
-        HoundTTS.Transmit(message, tp, ep)
+        HoundTTS.Transmit(message, tp, ep, xl)
     end)
     if not ok then
         env.error("[HoundTTS-test] " .. label .. " FAILED: " .. tostring(err))
@@ -73,10 +120,14 @@ local tests = {
     -- Test tone (confirms SRS connection before any provider runs)
     { type = "tone" },
 
+    -- getSpeechTime return value sanity check (no transmission)
+    { type = "getSpeechTime" },
+
     -- SAPI (Windows built-in TTS, no credentials needed)
-    { "SAPI default voice",
-      "SAPI default voice. Windows built-in text to speech.",
-      "SAPI",
+    { "SAPI default (multi-freq 251+305)",
+      "SAPI default voice on two frequencies. Windows built-in text to speech.",
+      { freqs = "251.0,305.0", modulations = "AM,AM", coalition = TEST_COALITION,
+        name = "HoundTTS-Test-SAPI", volume = 1.0 },
       { provider = "sapi", culture = "en-US", gender = "female", speed = 1.0 } },
 
     { "SAPI male voice",
@@ -163,23 +214,23 @@ local tests = {
       "ElevenLabs-Brian",
       { provider = "elevenlabs", voice = "nPczCjzI2devNBz1zQrb", speed = 1.0 } },
 
-    -- Amazon Polly
-    -- Requires [Polly] access_key + secret_key + region in HoundTTS-credentials.ini.
+    -- Amazon Polly (TTS provider="aws", "polly" also accepted as alias)
+    -- Requires [AWS] access_key + secret_key + region in HoundTTS-credentials.ini.
     -- engine = "standard" is free tier (5M chars/month for 12 months); "neural" is paid.
-    { "Polly Joanna standard",
+    { "AWS Polly Joanna standard",
       "Amazon Polly. Joanna standard voice.",
-      "Polly-Joanna",
-      { provider = "polly", voice = "Joanna", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
+      "AWS-Polly-Joanna",
+      { provider = "aws", voice = "Joanna", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
 
-    { "Polly Matthew standard",
+    { "AWS Polly Matthew standard",
       "Amazon Polly. Matthew standard voice.",
-      "Polly-Matthew",
-      { provider = "polly", voice = "Matthew", culture = "en-US", gender = "male", speed = 1.0, engine = "standard" } },
+      "AWS-Polly-Matthew",
+      { provider = "aws", voice = "Matthew", culture = "en-US", gender = "male", speed = 1.0, engine = "standard" } },
 
-    { "Polly auto-select by culture+gender",
+    { "AWS Polly auto-select by culture+gender",
       "Amazon Polly auto-selected voice from culture and gender.",
-      "Polly-auto",
-      { provider = "polly", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
+      "AWS-Polly-auto",
+      { provider = "aws", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
 
     -- Kitten TTS (local/self-hosted neural TTS — https://github.com/devnen/Kitten-TTS-Server)
     -- Requires [KittenTTS] endpoint in HoundTTS-credentials.ini.
@@ -203,13 +254,61 @@ local tests = {
       "Kitten-fast",
       { provider = "kittentts", voice = "Bella", speed = 1.3 } },
 
-    -- Multi-frequency transmission
-    { "Multi-frequency (251 + 305 AM)",
-      "Transmitting on two frequencies at once.",
-      { freqs = "251.0,305.0", modulations = "AM,AM", coalition = TEST_COALITION,
-        name = "HoundTTS-Test-MultiFreq", volume = 1.0 },
-      { provider = "sapi", culture = "en-US", gender = "female", speed = 1.0 } },
+    -- OpenAI TTS (cloud) / OpenAI-compatible endpoints (LocalAI, etc.)
+    -- Requires [OpenAI] api_key (and optionally endpoint + model) in HoundTTS-credentials.ini.
+    -- OpenAI voices: alloy, ash, coral, echo, fable, onyx, nova, sage, shimmer
+    -- { "OpenAI alloy (tts-1)",
+    --   "OpenAI TTS. Alloy voice. Default model.",
+    --   "OpenAI-alloy",
+    --   { provider = "openai", voice = "alloy", speed = 1.0 } },
 
+    -- { "OpenAI nova female (tts-1)",
+    --   "OpenAI TTS. Nova voice. Female neural voice.",
+    --   "OpenAI-nova",
+    --   { provider = "openai", voice = "nova", speed = 1.0 } },
+
+    -- { "OpenAI onyx male (tts-1)",
+    --   "OpenAI TTS. Onyx voice. Male neural voice.",
+    --   "OpenAI-onyx",
+    --   { provider = "openai", voice = "onyx", speed = 1.0 } },
+
+    -- { "OpenAI echo speed 1.3",
+    --   "OpenAI TTS. Echo voice at one point three speed.",
+    --   "OpenAI-echo-fast",
+    --   { provider = "openai", voice = "echo", speed = 1.3 } },
+
+    -- { "OpenAI shimmer low volume (0.25)",
+    --   "OpenAI TTS. Shimmer voice at quarter volume.",
+    --   "OpenAI-quiet",
+    --   { provider = "openai", voice = "shimmer", speed = 1.0 },
+    --   volume = 0.25 },
+
+    -- pocket-tts voices: alba, marius, javert, jean, fantine, cosette, eponine, azelma
+    { "OpenAI alba (pocket-tts)",
+      "OpenAI TTS. alba voice. Default model.",
+      "OpenAI-alba",
+      { provider = "openai", voice = "alba", speed = 1.0 } },
+
+    { "OpenAI marius (pocket-tts)",
+      "OpenAI TTS. marius voice. Female neural voice.",
+      "OpenAI-marius",
+      { provider = "openai", voice = "marius", speed = 1.0 } },
+
+    { "OpenAI javert male (pocket-tts)",
+      "OpenAI TTS. javert voice. Male neural voice.",
+      "OpenAI-javert",
+      { provider = "openai", voice = "javert", speed = 1.0 } },
+
+    { "OpenAI jean speed 1.3",
+      "OpenAI TTS. jean voice at one point three speed.",
+      "OpenAI-jean-fast",
+      { provider = "openai", voice = "jean", speed = 1.3 } },
+
+    { "OpenAI fantine low volume (0.25)",
+      "OpenAI TTS. fantine voice at quarter volume.",
+      "OpenAI-quiet",
+      { provider = "openai", voice = "fantine", speed = 1.0 },
+      volume = 0.25 },
     -- Speed extremes
     { "SAPI slow (0.6x)",
       "Slow speed at zero point six.",
@@ -222,10 +321,32 @@ local tests = {
       { provider = "piper", voice = "en_US-lessac-low", culture = "en-US", speed = 1.8 } },
 }
 
--- Schedule Phase 1 tests
-for i, t in ipairs(tests) do
+-- Schedule Phase 1 tests (only those whose provider is enabled)
+local activeTests = {}
+for _, t in ipairs(tests) do
+    if t.type ~= nil or providerEnabled(t[4]) then
+        activeTests[#activeTests + 1] = t
+    end
+end
+
+for i, t in ipairs(activeTests) do
     after(1 + GAP * (i - 1), function()
-        if t.type == "tone" then
+        if t.type == "getSpeechTime" then
+            env.info("[HoundTTS-test] " .. i .. ": getSpeechTime return value check")
+            local test_str = "A rainbow is a meteorological phenomenon that is caused by reflection, refraction and dispersion of light in water droplets resulting in a spectrum of light appearing in the sky."
+            local t1 = HoundTTS.getSpeechTime(test_str, 1, false)
+            local t2 = HoundTTS.getSpeechTime(test_str, 1, true)
+            local t3 = HoundTTS.getSpeechTime(#test_str, 1, false)
+            if type(t1) ~= "number" or type(t2) ~= "number" or type(t3) ~= "number" then
+                env.error("[HoundTTS-test] " .. i .. " FAILED: unexpected return types t1=" .. type(t1) .. " t2=" .. type(t2) .. " t3=" .. type(t3))
+            elseif t2 >= t1 then
+                env.error("[HoundTTS-test] " .. i .. " FAILED: googleTTS should be faster, got t1=" .. t1 .. " t2=" .. t2)
+            elseif t1 ~= t3 then
+                env.error("[HoundTTS-test] " .. i .. " FAILED: string vs length mismatch t1=" .. t1 .. " t3=" .. t3)
+            else
+                env.info("[HoundTTS-test] " .. i .. " OK: sapi=" .. t1 .. "s google=" .. t2 .. "s byLen=" .. t3 .. "s")
+            end
+        elseif t.type == "tone" then
             env.info("[HoundTTS-test] " .. i .. ": Test tone")
             local ok, err = pcall(function()
                 HoundTTS.TestTone(TEST_FREQ, TEST_MOD, TEST_COALITION)
@@ -243,7 +364,191 @@ for i, t in ipairs(tests) do
 end
 
 -- ============================================================
--- Phase 2: TextToSpeech — STTS backward-compatibility tests
+-- Stage 2: Translate-in-Transmit tests
+--
+-- These tests exercise the translation_params 4th argument to
+-- HoundTTS.Transmit(). The message is translated on the DLL
+-- background thread before TTS synthesis and SRS transmission.
+--
+-- Each entry: { label, message, tp_name_or_table, ep, xl }
+--   ep = provider_params (TTS provider)
+--   xl = translation_params (translate provider + target language)
+-- ============================================================
+local stage1_offset = 1 + GAP * #activeTests
+
+local testsXL = {
+    -- Google TTS (German voice) + Google Translate → German
+    { "Google TTS + Google Translate → de",
+      "Two aircraft approaching from the north at high altitude.",
+      "GoogleXL-de",
+      { provider = "google", voice = "de-DE-Standard-A", culture = "de-DE", gender = "female", speed = 1.0 },
+      { provider = "google", language = "de" } },
+
+    -- Piper (English model) + LibreTranslate → French
+    { "Piper + LibreTranslate → fr",
+      "Runway two seven, wind two five zero at twelve knots. Cleared for takeoff.",
+      "PiperXL-fr",
+      { provider = "piper", voice = "en_US-lessac-low", culture = "en-US", speed = 1.0 },
+      { provider = "libretranslate", language = "fr" } },
+
+    -- OpenAI pocket-tts (alba) + OpenAI Translate → German
+    { "OpenAI pocket-tts + OpenAI Translate → de",
+      "BOGEY, BRAA two seven zero for thirty five, angels twenty, hot, hostile.",
+      "OpenAIXL-de",
+      { provider = "openai", voice = "alba", speed = 1.0 },
+      { provider = "openai", language = "de" } },
+}
+
+-- Schedule Stage 2 tests (both TTS and translation providers must be enabled)
+for i, t in ipairs(testsXL) do
+    if providerEnabled(t[4]) and translationProviderEnabled(t[5]) then
+        after(stage1_offset + GAP * (i - 1), function()
+            local tp = type(t[3]) == "string" and baseTP(t[3]) or t[3]
+            runTest("XL-" .. i .. ": " .. t[1], "Translate+TTS " .. i .. ". " .. t[2], tp, t[4], t[5])
+            return nil
+        end)
+    else
+        env.info("[HoundTTS-test] Skipping translate-transmit test: " .. t[1] .. " (provider disabled)")
+    end
+end
+
+-- ============================================================
+-- Stage 3: Standalone Translation tests
+--
+-- These tests exercise HoundTTS.Translate(). Each test sends a
+-- military-aviation-style message for translation and displays
+-- both the input and output on screen via trigger.action.outText.
+--
+-- Requires [OpenAI] api_key + endpoint in HoundTTS-credentials.ini
+-- and a chat_model set (default: gpt-4o-mini).
+-- ============================================================
+local stage2_offset = stage1_offset + GAP * #testsXL
+
+-- Helper: run one translation test and show input/output on screen (async)
+local function runTranslateTest(index, label, message, params)
+    env.info("[HoundTTS-test] Translate-" .. index .. ": " .. label .. " (dispatched)")
+    local ok, callErr = pcall(function()
+        HoundTTS.Translate(message, params, function(result, err)
+            if result then
+                local display = "Translate-" .. index .. ": " .. label
+                    .. "\n\nIN:  " .. message
+                    .. "\nOUT: " .. tostring(result)
+                env.info("[HoundTTS-test] " .. display)
+                trigger.action.outText(display, 15)
+            else
+                local errMsg = "Translate-" .. index .. ": " .. label .. "\nFAILED: " .. tostring(err)
+                env.error("[HoundTTS-test] " .. errMsg)
+                trigger.action.outText("HoundTTS Translate FAILED\n" .. errMsg, 15)
+            end
+        end)
+    end)
+    if not ok then
+        local errMsg = "Translate-" .. index .. ": " .. label .. "\nERROR: " .. tostring(callErr)
+        env.error("[HoundTTS-test] " .. errMsg)
+        trigger.action.outText("HoundTTS Translate FAILED\n" .. errMsg, 15)
+    end
+end
+
+local testsTranslate = {
+    -- Basic translation to German
+    { "English → German (basic)",
+      "Two aircraft approaching from the north at high altitude.",
+      { provider = "openai", language = "de" } },
+
+    -- Brevity code preservation: FOX calls should NOT be translated
+    { "Brevity codes preserved (de)",
+      "FOX 3, FOX 3! Missile away. SPLASH one bandit.",
+      { provider = "openai", language = "de" } },
+
+    -- BRAA call — numbers and brevity terms should stay intact
+    { "BRAA call (fr)",
+      "BOGEY, BRAA 270 for 35, angels 20, hot, hostile.",
+      { provider = "openai", language = "fr" } },
+
+    -- Mixed brevity and plain language
+    { "Mixed brevity + plain (es)",
+      "WINCHESTER on all air-to-air missiles. RTB to home plate. Request BINGO fuel state.",
+      { provider = "openai", language = "es" } },
+
+    -- GCI-style radio call
+    { "GCI radio call (pt)",
+      "Two bandits, BULLSEYE 090 for 45, angels 25, track west, hostile.",
+      { provider = "openai", language = "pt" } },
+
+    -- ATIS-style weather report
+    { "ATIS weather (ru)",
+      "Runway 27, wind 250 at 12 knots, visibility 10 kilometers, QNH 1013. Expect ILS approach.",
+      { provider = "openai", language = "ru" } },
+
+    -- Already in target language — should pass through unchanged
+    { "Already in target language (en→en)",
+      "TALLY two, MERGED, DEFENSIVE!",
+      { provider = "openai", language = "en" } },
+
+    -- CAS / JTAC terminology
+    { "CAS 9-line (it)",
+      "JTAC contact. Type 2 control. Bomb on coordinate. Friendlies marked with smoke. CLEARED HOT.",
+      { provider = "openai", language = "it" } },
+
+    -- ---- Google Translate tests ----
+    -- Requires [Google] credentials_file + Cloud Translation API enabled.
+    -- Note: Google Translate is a pure translation API — no prompt engineering,
+    --       brevity codes may be translated literally (expected behavior).
+
+    { "Google → de (basic)",
+      "Two aircraft approaching from the north at high altitude.",
+      { provider = "google", language = "de" } },
+
+    { "Google → fr (BRAA call)",
+      "BOGEY, BRAA 270 for 35, angels 20, hot, hostile.",
+      { provider = "google", language = "fr" } },
+
+    { "Google → ru (ATIS)",
+      "Runway 27, wind 250 at 12 knots, visibility 10 kilometers, QNH 1013. Expect ILS approach.",
+      { provider = "google", language = "ru" } },
+
+    { "Google → es (mixed brevity)",
+      "WINCHESTER on all air-to-air missiles. RTB to home plate. Request BINGO fuel state.",
+      { provider = "google", language = "es" } },
+
+    -- ---- LibreTranslate tests ----
+    -- Requires a running LibreTranslate instance.
+    -- Default endpoint: http://localhost:5000
+    -- Configure via [LibreTranslate] endpoint in HoundTTS-credentials.ini
+
+    { "LibreTranslate → de (basic)",
+      "Two aircraft approaching from the north at high altitude.",
+      { provider = "libretranslate", language = "de" } },
+
+    { "LibreTranslate → fr (BRAA call)",
+      "BOGEY, BRAA 270 for 35, angels 20, hot, hostile.",
+      { provider = "libretranslate", language = "fr" } },
+
+    { "LibreTranslate → ru (ATIS)",
+      "Runway 27, wind 250 at 12 knots, visibility 10 kilometers, QNH 1013.",
+      { provider = "libretranslate", language = "ru" } },
+
+    { "LibreTranslate → es (radio call)",
+      "Cleared for takeoff runway two seven. Wind two five zero at twelve. Altimeter two niner niner two.",
+      { provider = "libretranslate", language = "es" } },
+}
+
+-- Schedule Stage 3 tests
+env.info("[HoundTTS-test] Stage 3 scheduling: " .. #testsTranslate .. " translate tests, stage2_offset=" .. tostring(stage2_offset))
+for i, t in ipairs(testsTranslate) do
+    if translationProviderEnabled(t[3]) then
+        after(stage2_offset + GAP * (i - 1), function()
+            env.info("[HoundTTS-test] Stage 3 timer fired: translate test " .. i .. ": " .. t[1])
+            runTranslateTest(i, t[1], t[2], t[3])
+            return nil
+        end)
+    else
+        env.info("[HoundTTS-test] Skipping translation test " .. i .. ": " .. t[1] .. " (provider disabled)")
+    end
+end
+
+-- ============================================================
+-- Stage 4: TextToSpeech — STTS backward-compatibility tests
 --
 -- These tests exercise HoundTTS.TextToSpeech(), which is the
 -- drop-in replacement for STTS.TextToSpeech().  The signature
@@ -259,9 +564,8 @@ end
 --   (default / googleTTS=false) → sapi provider
 --
 -- Each entry: { label, message, freq, mod, vol, name, coal, ... }
--- Special entries: { type = "getSpeechTime" }
 -- ============================================================
-local phase1_offset = 1 + GAP * #tests
+local stage3_offset = stage2_offset + GAP * #testsTranslate
 
 local testsTTS = {
     -- Minimal call — required args only, all optionals omitted
@@ -317,32 +621,19 @@ local testsTTS = {
     { "FM modulation",
       "TextToSpeech on FM modulation.",
       TEST_FREQ, "FM", 1.0, "STTS-Test", TEST_COALITION },
-
-    -- getSpeechTime return value sanity check (no transmission)
-    { type = "getSpeechTime" },
 }
 
--- Schedule Phase 2 tests
-for i, t in ipairs(testsTTS) do
-    after(phase1_offset + GAP * (i - 1), function()
-        if t.type == "getSpeechTime" then
-            env.info("[HoundTTS-test] TTS-" .. i .. ": getSpeechTime return value check")
-            local test_str = "A rainbow is a meteorological phenomenon that is caused by reflection, refraction and dispersion of light in water droplets resulting in a spectrum of light appearing in the sky."
-            local t1 = HoundTTS.getSpeechTime(test_str, 1, false)
-            local t2 = HoundTTS.getSpeechTime(test_str, 1, true)
-            local t3 = HoundTTS.getSpeechTime(#test_str, 1, false)
-            if type(t1) ~= "number" or type(t2) ~= "number" or type(t3) ~= "number" then
-                env.error("[HoundTTS-test] TTS-" .. i .. " FAILED: unexpected return types t1=" .. type(t1) .. " t2=" .. type(t2) .. " t3=" .. type(t3))
-            elseif t2 >= t1 then
-                env.error("[HoundTTS-test] TTS-" .. i .. " FAILED: googleTTS should be faster (shorter base), got t1=" .. t1 .. " t2=" .. t2)
-            elseif t1 ~= t3 then
-                env.error("[HoundTTS-test] TTS-" .. i .. " FAILED: string vs length mismatch t1=" .. t1 .. " t3=" .. t3)
-            else
-                env.info("[HoundTTS-test] TTS-" .. i .. " OK: sapi=" .. t1 .. "s google=" .. t2 .. "s byLen=" .. t3 .. "s")
-            end
-        else
-            runTestTTS("TTS-" .. i .. ": " .. t[1], "Test TTS " .. i .. ". " .. t[2], unpack(t, 3))
-        end
+-- Schedule Stage 4 tests
+local activeTTS = {}
+for _, t in ipairs(testsTTS) do
+    if providerEnabled({ provider = "sapi" }) then
+        activeTTS[#activeTTS + 1] = t
+    end
+end
+
+for i, t in ipairs(activeTTS) do
+    after(stage3_offset + GAP * (i - 1), function()
+        runTestTTS("TTS-" .. i .. ": " .. t[1], "Test TTS " .. i .. ". " .. t[2], unpack(t, 3))
         return nil
     end)
 end
@@ -350,8 +641,8 @@ end
 -- ============================================================
 -- Done marker
 -- ============================================================
-local phase2_offset = phase1_offset + GAP * #testsTTS
-after(phase2_offset, function()
+local stage4_offset = stage3_offset + GAP * #testsTTS
+after(stage4_offset, function()
     env.info("[HoundTTS-test] All tests dispatched.")
     trigger.action.outText("HoundTTS: All provider tests dispatched. Check SRS on " .. TEST_FREQ .. " " .. TEST_MOD, 10)
     return nil

@@ -3,7 +3,7 @@
 #ifndef HOUNDTTS_SRS_CLIENT_H
 #define HOUNDTTS_SRS_CLIENT_H
 
-#include "audio_queue.h"
+#include "../audio_queue.h"
 #include "srs_types.h"
 
 #include <string>

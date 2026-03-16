@@ -37,11 +37,21 @@ public:
     // [KittenTTS]
     std::string GetKittenEndpoint() const;
 
-    // [Polly]
-    std::string GetPollyAccessKey() const;
-    std::string GetPollySecretKey() const;
-    std::string GetPollyRegion() const;
-    std::string GetPollyEngine() const;
+    // [OpenAI]
+    std::string GetOpenAIKey() const;
+    std::string GetOpenAIEndpoint() const;
+    std::string GetOpenAIModel() const;
+    std::string GetOpenAIChatModel() const;
+
+    // [LibreTranslate]
+    std::string GetLibreTranslateEndpoint() const;
+    std::string GetLibreTranslateApiKey() const;
+
+    // [AWS]
+    std::string GetAwsAccessKey() const;
+    std::string GetAwsSecretKey() const;
+    std::string GetAwsRegion() const;
+    std::string GetAwsPollyEngine() const;
 
     // [Discord]
     std::string GetDiscordToken() const;
@@ -69,10 +79,16 @@ private:
     std::string elevenLabsKey_;
     std::string elevenLabsModelId_;
     std::string kittenEndpoint_;
-    std::string pollyAccessKey_;
-    std::string pollySecretKey_;
-    std::string pollyRegion_;
-    std::string pollyEngine_;
+    std::string openaiKey_;
+    std::string openaiEndpoint_;
+    std::string openaiModel_;
+    std::string openaiChatModel_;
+    std::string libreTranslateEndpoint_;
+    std::string libreTranslateApiKey_;
+    std::string awsAccessKey_;
+    std::string awsSecretKey_;
+    std::string awsRegion_;
+    std::string awsPollyEngine_;
     std::string discordToken_;
     std::string logLevel_;
 

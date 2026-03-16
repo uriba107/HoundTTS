@@ -4,15 +4,20 @@
 #define HOUNDTTS_BACKEND_H
 
 #include <string>
+#include <memory>
+#include <cstdint>
+#include "provider.h"
+#include "backends/pcm_queue.h"
 
 namespace HoundTTS {
 
 // TTS transmission request — all fields are UTF-8 strings unless noted.
+// Consumed by TTSPipeline::Produce(); backends never see this directly.
 struct TTSRequest {
     // Routing
     std::string writedir;       // Saved Games\DCS\ — DLL locates credentials INI from here
     std::string transmitter;    // "srs" | "discord"
-    std::string provider;       // "piper" | "azure" | "google" | "elevenlabs" | "sapi" | "kittentts" | "kitten_tts" | "kitten"
+    TtsProvider  provider = TtsProvider::Sapi;
 
     // SRS / transmission
     int         srsPort = 5002;
@@ -36,7 +41,7 @@ struct TTSRequest {
     std::string culture;        // e.g. en-US, en-GB
     std::string voice;          // Piper model name OR ElevenLabs voice ID
     std::string speaker;        // Piper speaker name or integer ID (multi-speaker models only)
-    std::string pollyEngine;    // "neural" | "standard" | "long-form" (overrides INI default)
+    std::string awsPollyEngine; // "neural" | "standard" | "long-form" (overrides INI default)
 
     // Position
     double      lat = 91.0;    // >90 means unset
@@ -44,15 +49,40 @@ struct TTSRequest {
     double      alt = -500.0;  // <-499 means unset
 
     bool        isSSML = false;
+
+    // Optional translation step (runs before TTS in the background thread).
+    // If translateProvider is non-empty, message is translated first.
+    TranslateProvider translateProvider = TranslateProvider::None;
+    std::string translateLanguage;       // ISO 639-1 target code e.g. "de"
+    std::string translateSourceLanguage; // ISO 639-1 source code, default "en"
+};
+
+// Transmission parameters passed to a backend — pure routing/network info,
+// no TTS logic. Extracted from TTSRequest by lua_tts.cpp before calling Transmit().
+struct TransmitParams {
+    std::string host;
+    int         port       = 5002;
+    std::string freqs;          // Comma-separated frequencies in MHz
+    std::string modulations;    // Comma-separated AM/FM
+    bool        encrypt    = false;
+    uint8_t     encKey     = 0;
+    int         coalition  = 0;
+    std::string name;           // Transmitter name shown in SRS
+    double      lat        = 91.0;
+    double      lon        = 181.0;
+    double      alt        = -500.0;
 };
 
 // Abstract backend interface.
+// Receives already-synthesised 16kHz mono PCM and transmission parameters.
+// Returns true if the transmission was dispatched (non-blocking implementations
+// may return before the stream completes).
 class ITTSBackend {
 public:
     virtual ~ITTSBackend() = default;
 
-    // Transmit a TTS message. Returns true if the request was dispatched successfully.
-    virtual bool TransmitTTS(const TTSRequest& req) = 0;
+    virtual bool Transmit(std::shared_ptr<PCMQueue> pcm,
+                          const TransmitParams& params) = 0;
 };
 
 } // namespace HoundTTS
