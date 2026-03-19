@@ -15,11 +15,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "HoundTTS"
             VALUE "FileDescription",  "HoundTTS DCS TTS Plugin"
-            VALUE "FileVersion",      "@PROJECT_VERSION@"
+            VALUE "FileVersion",      "@HOUNDTTS_VERSION_FULL@"
             VALUE "InternalName",     "HoundTTS"
             VALUE "OriginalFilename", "HoundTTS.dll"
             VALUE "ProductName",      "HoundTTS"
-            VALUE "ProductVersion",   "@PROJECT_VERSION@"
+            VALUE "ProductVersion",   "@HOUNDTTS_VERSION_FULL@"
         END
     END
     BLOCK "VarFileInfo"

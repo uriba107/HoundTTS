@@ -1,12 +1,19 @@
 cmake_minimum_required(VERSION 3.15)
 
-# Allow CI to inject version via -DHOUNDTTS_VERSION_OVERRIDE=x.y.z
+# Allow CI to inject version via -DHOUNDTTS_VERSION_OVERRIDE=x.y.z (numeric only, e.g. 0.2.0)
 set(HOUNDTTS_VERSION_OVERRIDE "" CACHE STRING "Override project version (set by CI from git tag)")
+# Full version string including pre-release suffix (e.g. 0.2.0-beta1); defaults to numeric version
+set(HOUNDTTS_VERSION_FULL     "" CACHE STRING "Full version string with pre-release suffix (e.g. 0.2.0-beta1)")
 
 if(HOUNDTTS_VERSION_OVERRIDE)
     project(HoundTTS VERSION ${HOUNDTTS_VERSION_OVERRIDE} LANGUAGES CXX)
 else()
     project(HoundTTS VERSION 0.0.0 LANGUAGES CXX)
+endif()
+
+# If no full version was provided, fall back to the numeric project version
+if(NOT HOUNDTTS_VERSION_FULL)
+    set(HOUNDTTS_VERSION_FULL "${PROJECT_VERSION}")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -92,6 +99,7 @@ target_compile_definitions(HoundTTS PRIVATE
     _CRT_SECURE_NO_WARNINGS
     CPPHTTPLIB_OPENSSL_SUPPORT
     HOUNDTTS_VERSION="${PROJECT_VERSION}"
+    HOUNDTTS_VERSION_FULL="${HOUNDTTS_VERSION_FULL}"
 )
 
 # MSVC: static runtime (/MT), disable warnings that fire on Windows SDK headers

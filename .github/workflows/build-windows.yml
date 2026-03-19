@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-windows:
     name: Windows Docker (MSVC)
@@ -97,12 +100,17 @@ jobs:
         shell: powershell
         run: |
           if ("${{ github.ref }}" -match '^refs/tags/v(.+)$') {
-            $ver = $Matches[1]
+            $full = $Matches[1]
+            # CMake project(VERSION) only accepts numeric x.y.z[.w] — strip pre-release suffix
+            $ver = ($full -split '-')[0]
           } else {
-            $ver = "0.0.0"
+            $full = "0.0.0"
+            $ver  = "0.0.0"
           }
-          Write-Host "Version: $ver"
+          Write-Host "Full version : $full"
+          Write-Host "CMake version: $ver"
           echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "FULL_VERSION=$full" >> $env:GITHUB_OUTPUT
 
       # --------------------------------------------------------
       # 4b. Build the Docker image
@@ -117,6 +125,7 @@ jobs:
             -t houndtts-builder-msvc `
             --target output `
             --build-arg HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }} `
+            --build-arg HOUNDTTS_VERSION_FULL=${{ steps.version.outputs.FULL_VERSION }} `
             .
 
       # --------------------------------------------------------
