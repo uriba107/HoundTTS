@@ -89,8 +89,8 @@ try {
     if ($LASTEXITCODE -ne 0) { Write-Error "docker cp failed."; exit 1 }
 } finally {
     docker --context $Context rm $containerId | Out-Null
-    Compress-Archive -Path dist\base\*         -DestinationPath release\HoundTTS-windows.zip         -Force
-    Compress-Archive -Path dist\piper-addon\*  -DestinationPath release\HoundTTS-piper-addon-windows.zip  -Force
+    Compress-Archive -Path (Join-Path $ScriptDir "dist\base\*")        -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-windows.zip")              -Force
+    Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-addon\*") -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-addon-windows.zip")  -Force
 }
 
 Write-Host ""
