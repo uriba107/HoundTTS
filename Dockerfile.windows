@@ -21,9 +21,20 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; \
      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
 
-RUN choco install -y cmake --installargs "ADD_CMAKE_TO_PATH=System"
-RUN choco install -y wget unzip git
-RUN choco install -y strawberryperl
+ARG CMAKE_VERSION=4.3.0
+RUN choco install -y cmake --version %CMAKE_VERSION% --installargs "ADD_CMAKE_TO_PATH=System"
+
+ARG GIT_VERSION=2.53.0
+RUN choco install -y git --version %GIT_VERSION%
+
+ARG WGET_VERSION=1.21.4
+RUN choco install -y wget --version %WGET_VERSION%
+
+ARG UNZIP_VERSION=6.0
+RUN choco install -y unzip --version %UNZIP_VERSION%
+
+ARG STRAWBERRYPERL_VERSION=5.38.2.2
+RUN choco install -y strawberryperl --version %STRAWBERRYPERL_VERSION%
 
 # Visual Studio 2022 Build Tools — MSVC v143 + Windows 10 SDK 19041 (sapi.h, sphelper.h, COM headers)
 # Split into two layers to avoid hcsshim ImportLayer failure on large single layers
@@ -40,16 +51,18 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      Remove-Item 'C:\vs_buildtools.exe'; \
      if ($p.ExitCode -ne 0) { throw \"vs_buildtools.exe exited with code $($p.ExitCode)\" }"
 
-# vcpkg + OpenSSL static
-RUN git clone https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
+# vcpkg — classic mode install (no vcpkg.json manifest; version pinned via VCPKG_TAG)
+ARG VCPKG_TAG=2026.03.18
+RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
     C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics
+# Install packages — versions determined by the pinned vcpkg tag's built-in baseline
 RUN C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
-# cpp-httplib header (version-pinned to avoid surprises on rebuilds)
+ARG HTTPLIB_VERSION=v0.38.0
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
-     Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h' \
+     Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
      -OutFile 'C:\deps\include\httplib.h'"
 
 # Piper release + voice models (large downloads, cache here not in build stage)
@@ -76,6 +89,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
        $file = Split-Path $_ -Leaf; \
        Invoke-WebRequest -Uri \"$hf/$_\" -OutFile \"C:\deps\voices\$file\" \
      }"
+
 
 # ============================================================
 # Stage 2: piper — assemble piper-addon from cached deps
