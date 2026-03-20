@@ -70,7 +70,8 @@ bool AzureTTS::SynthesizeToQueue(
 
     // If the caller already provided a full SSML document, use it directly
     std::string ssml;
-    if (text.find("<speak") != std::string::npos)
+    bool isSsml = (text.size() >= 6 && text.compare(0, 6, "<speak") == 0);
+    if (isSsml)
         ssml = text;
     else
         ssml = BuildSSML(text, voice, culture, gender, speed);

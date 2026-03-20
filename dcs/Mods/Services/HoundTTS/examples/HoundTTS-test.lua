@@ -201,6 +201,17 @@ local tests = {
       "Google-auto",
       { provider = "google", culture = "en-US", gender = "female", speed = 1.0 } },
 
+    { "Google SSML with prosody and break",
+      '<speak><prosody rate="fast" pitch="+2st">Google SSML test.</prosody>'
+      .. '<break time="500ms"/>Resumed at normal rate.</speak>',
+      "Google-SSML",
+      { provider = "google", voice = "en-US-Standard-C", culture = "en-US", gender = "female", speed = 1.0 } },
+
+    { "Google SSML say-as cardinal number",
+      '<speak>Altitude <say-as interpret-as="cardinal">25000</say-as> feet.</speak>',
+      "Google-SSML-sayas",
+      { provider = "google", voice = "en-US-Standard-D", culture = "en-US", gender = "male", speed = 1.0 } },
+
     -- ElevenLabs
     -- Requires [ElevenLabs] api_key in HoundTTS-credentials.ini.
     -- Free-tier voices: Aria=9BWtsMINqrJLrRacOk9x, Brian=nPczCjzI2devNBz1zQrb
@@ -231,6 +242,17 @@ local tests = {
       "Amazon Polly auto-selected voice from culture and gender.",
       "AWS-Polly-auto",
       { provider = "aws", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
+
+    { "AWS Polly SSML with prosody and break",
+      '<speak><prosody rate="fast" pitch="+2st">AWS Polly SSML test.</prosody>'
+      .. '<break time="500ms"/>Resumed at normal rate.</speak>',
+      "AWS-Polly-SSML",
+      { provider = "aws", voice = "Joanna", culture = "en-US", gender = "female", speed = 1.0, engine = "standard" } },
+
+    { "AWS Polly SSML say-as cardinal number",
+      '<speak>Altitude <say-as interpret-as="cardinal">25000</say-as> feet.</speak>',
+      "AWS-Polly-SSML-sayas",
+      { provider = "aws", voice = "Matthew", culture = "en-US", gender = "male", speed = 1.0, engine = "standard" } },
 
     -- Kitten TTS (local/self-hosted neural TTS — https://github.com/devnen/Kitten-TTS-Server)
     -- Requires [KittenTTS] endpoint in HoundTTS-credentials.ini.
@@ -357,7 +379,8 @@ for i, t in ipairs(activeTests) do
         else
             local tp = type(t[3]) == "string" and baseTP(t[3]) or t[3]
             if t.volume then tp.volume = t.volume end
-            runTest(i .. ": " .. t[1], "Test " .. i .. ". " .. t[2], tp, t[4])
+            local msg = (t[2]:sub(1,6):lower() == "<speak") and t[2] or ("Test " .. i .. ". " .. t[2])
+            runTest(i .. ": " .. t[1], msg, tp, t[4])
         end
         return nil
     end)
