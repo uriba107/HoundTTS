@@ -379,7 +379,8 @@ for i, t in ipairs(activeTests) do
         else
             local tp = type(t[3]) == "string" and baseTP(t[3]) or t[3]
             if t.volume then tp.volume = t.volume end
-            runTest(i .. ": " .. t[1], "Test " .. i .. ". " .. t[2], tp, t[4])
+            local msg = (t[2]:sub(1,6):lower() == "<speak") and t[2] or ("Test " .. i .. ". " .. t[2])
+            runTest(i .. ": " .. t[1], msg, tp, t[4])
         end
         return nil
     end)
