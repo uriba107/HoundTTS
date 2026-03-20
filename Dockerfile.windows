@@ -66,9 +66,9 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      -OutFile 'C:\deps\include\httplib.h'"
 
 # Piper release + voice models (large downloads, cache here not in build stage)
+ARG PIPER_VERSION=v2.0.0
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "$rel = (Invoke-WebRequest -Uri 'https://api.github.com/repos/piper-tts-go/piper/releases/latest' \
-             -UseBasicParsing | ConvertFrom-Json).tag_name; \
+    "$rel = $env:PIPER_VERSION; \
      Write-Host \"Downloading piper $rel\"; \
      Invoke-WebRequest -Uri \"https://github.com/piper-tts-go/piper/releases/download/$rel/piper_windows_amd64.zip\" \
          -OutFile C:\piper.zip; \

@@ -93,7 +93,12 @@ jobs:
           $buildArgs += "."
           docker @buildArgs
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
-          docker push ${{ env.DEPS_IMAGE }}:latest
+          if ("${{ github.event_name }}" -ne "pull_request") {
+            docker push ${{ env.DEPS_IMAGE }}:latest
+            if ($LASTEXITCODE -ne 0) { throw "docker push (deps) failed" }
+          } else {
+            Write-Host "Skipping push (pull_request event - read-only token)" -ForegroundColor Yellow
+          }
 
       # --------------------------------------------------------
       # 4a. Derive version from git tag (v1.2.3 → 1.2.3)
