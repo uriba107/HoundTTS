@@ -84,9 +84,11 @@ bool GoogleTTS::SynthesizeToQueue(
     if (speed < 0.25) speed = 0.25;
     if (speed > 4.0)  speed = 4.0;
 
+    bool isSsml = (text.size() >= 7 && text.compare(0, 7, "<speak>") == 0);
+
     std::ostringstream body;
     body << "{"
-         << "\"input\":{\"text\":\"" << GoogleAuth::JsonEscape(text) << "\"},"
+         << "\"input\":{\"" << (isSsml ? "ssml" : "text") << "\":\"" << GoogleAuth::JsonEscape(text) << "\"},"
          << "\"voice\":{"
          << "\"languageCode\":\"" << locale << "\","
          << "\"ssmlGender\":\"" << ssmlGender << "\"";

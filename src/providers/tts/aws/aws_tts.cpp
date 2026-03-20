@@ -77,8 +77,13 @@ bool AwsTTS::SynthesizeToQueue(
     if (speed < 0.2) speed = 0.2;
     if (speed > 5.0) speed = 5.0;
 
+    bool isSsml = (text.size() >= 7 && text.compare(0, 7, "<speak>") == 0);
+
     std::string inputText, textType;
-    if (std::abs(speed - 1.0) > 0.01) {
+    if (isSsml) {
+        inputText = JsonEscape(text);
+        textType = "ssml";
+    } else if (std::abs(speed - 1.0) > 0.01) {
         inputText = "<speak><prosody rate='" + SpeedToRate(speed) + "'>" +
                     JsonEscape(text) + "</prosody></speak>";
         textType = "ssml";
