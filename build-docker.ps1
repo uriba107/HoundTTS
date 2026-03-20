@@ -14,14 +14,19 @@
 .PARAMETER Context
     Docker context to use. Defaults to 'default'.
 
+.PARAMETER NoCache
+    Pass --no-cache to docker build (forces full rebuild, bypasses all cached layers).
+
 .EXAMPLE
     .\build-docker.ps1
     .\build-docker.ps1 -Windows
     .\build-docker.ps1 -Windows -Context winhost
+    .\build-docker.ps1 -Windows -NoCache
 #>
 param(
     [switch]$Windows = $true,
-    [string]$Context = "default"
+    [string]$Context = "default",
+    [switch]$NoCache
 )
 
 Set-StrictMode -Version Latest
@@ -42,6 +47,68 @@ Write-Host "=== HoundTTS Docker Build ===" -ForegroundColor Cyan
 Write-Host "  Dockerfile : $Dockerfile"
 Write-Host "  Context    : $Context"
 Write-Host ""
+
+# Load deps.env into a hashtable
+$depsEnvPath = Join-Path $ScriptDir "deps.env"
+$deps = @{}
+if (Test-Path $depsEnvPath) {
+    Get-Content $depsEnvPath | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
+        $parts = $_ -split '=', 2
+        $deps[$parts[0].Trim()] = $parts[1].Trim()
+    }
+}
+
+# Dependency version check (Windows builds only)
+if ($Windows) {
+    Write-Host "Checking dependency pins..." -ForegroundColor Cyan
+    $anyOutdated = $false
+
+    function Check-DepPin {
+        param([string]$Name, [string]$Pinned, [string]$ApiUrl, [scriptblock]$Parse)
+        try {
+            $latest = & $Parse (Invoke-RestMethod $ApiUrl -UseBasicParsing)
+            if ($latest -eq $Pinned) {
+                Write-Host ("  " + $Name.PadRight(10) + " " + $Pinned.PadRight(18) + " (up to date)") -ForegroundColor Green
+            } else {
+                Write-Host ("  " + $Name.PadRight(10) + " " + $Pinned.PadRight(18) + " -> " + $latest + " available") -ForegroundColor Yellow
+                $script:anyOutdated = $true
+            }
+        } catch {
+            Write-Host ("  " + $Name.PadRight(10) + " " + $Pinned.PadRight(18) + " (could not fetch latest)") -ForegroundColor Gray
+        }
+    }
+
+    Check-DepPin "cmake"   $deps['CMAKE_VERSION']         "https://api.github.com/repos/Kitware/CMake/releases/latest"          { param($r) $r.tag_name -replace '^v','' }
+    Check-DepPin "git"     $deps['GIT_VERSION']           "https://api.github.com/repos/git-for-windows/git/releases/latest"    { param($r) $r.tag_name -replace '^v','' -replace '\.windows\.\d+$','' }
+    Check-DepPin "vcpkg"   $deps['VCPKG_TAG']             "https://api.github.com/repos/microsoft/vcpkg/releases/latest"        { param($r) $r.tag_name }
+    Check-DepPin "httplib" $deps['HTTPLIB_VERSION']       "https://api.github.com/repos/yhirose/cpp-httplib/releases/latest"    { param($r) $r.tag_name }
+
+    if ($anyOutdated) {
+        Write-Host ""
+        Write-Host "  Some pins are outdated. Update deps.env before building if desired." -ForegroundColor Yellow
+    }
+    Write-Host ""
+    Write-Host "Proceed with build? [Y/n] (auto-continuing in 10 seconds)" -NoNewline
+    $timeout  = 10
+    $proceed  = $true
+    $deadline = (Get-Date).AddSeconds($timeout)
+    while ((Get-Date) -lt $deadline) {
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            Write-Host ""
+            if ($key.KeyChar -match '^[Nn]') { $proceed = $false }
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    if ((Get-Date) -ge $deadline) { Write-Host " (timed out, continuing)" }
+    if (-not $proceed) {
+        Write-Host "Build cancelled." -ForegroundColor Red
+        Stop-Transcript | Out-Null
+        exit 0
+    }
+    Write-Host ""
+}
 
 # Check for Docker
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -64,7 +131,14 @@ if ($Windows) {
 # Build the Docker image
 Write-Host "Building Docker image..." -ForegroundColor Cyan
 $dockerfilePath = Join-Path $ScriptDir $Dockerfile
-docker --context $Context build -f $dockerfilePath -t $ImageName $ScriptDir
+$dockerBuildArgs = @("--context", $Context, "build", "-f", $dockerfilePath, "-t", $ImageName)
+if ($NoCache) { $dockerBuildArgs += "--no-cache" }
+foreach ($kv in $deps.GetEnumerator()) {
+    $dockerBuildArgs += "--build-arg"
+    $dockerBuildArgs += ($kv.Key + "=" + $kv.Value)
+}
+$dockerBuildArgs += $ScriptDir
+docker @dockerBuildArgs
 if ($LASTEXITCODE -ne 0) { Write-Error "docker build failed."; exit 1 }
 
 # Extract dist packages via docker cp (avoids volume-mount path issues)
@@ -92,6 +166,7 @@ try {
     Compress-Archive -Path (Join-Path $ScriptDir "dist\base\*")        -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-windows.zip")              -Force
     Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-addon\*") -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-addon-windows.zip")  -Force
 }
+
 
 Write-Host ""
 Write-Host "=== Build successful! ===" -ForegroundColor Green

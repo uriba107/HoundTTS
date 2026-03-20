@@ -10,9 +10,11 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DEPS_IMAGE: ghcr.io/uriba107/houndtts/houndtts-deps-win
 
 jobs:
   build-windows:
@@ -64,33 +66,40 @@ jobs:
           Write-Host "Docker daemon OS: $os"
 
       # --------------------------------------------------------
-      # 3. Cache the deps Docker layer
-      #    Key is based on the Dockerfile.windows deps section.
-      #    The cache is stored as a tarball of the image layers.
+      # 3. Log in to ghcr.io and pull/refresh the deps layer cache
       # --------------------------------------------------------
-      - name: Restore Docker layer cache
-        id: docker-cache
-        uses: actions/cache@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          path: C:\docker-cache\houndtts-deps.tar
-          key: houndtts-deps-win-${{ hashFiles('Dockerfile.windows') }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Load cached deps image
-        if: steps.docker-cache.outputs.cache-hit == 'true'
+      - name: Pull deps cache image (best-effort)
         shell: powershell
-        run: docker load -i C:\docker-cache\houndtts-deps.tar
+        run: docker pull ${{ env.DEPS_IMAGE }}:latest; exit 0
 
-      # Build deps stage only (used for caching)
-      - name: Build deps stage
-        if: steps.docker-cache.outputs.cache-hit != 'true'
+      - name: Build and push deps stage
         shell: powershell
         run: |
-          docker build `
-            --isolation=hyperv `
-            -f Dockerfile.windows `
-            -t houndtts-deps `
-            --target deps `
-            .
+          $buildArgs = @("build", "--isolation=hyperv", "-f", "Dockerfile.windows",
+            "-t", "${{ env.DEPS_IMAGE }}:latest",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:latest",
+            "--target", "deps")
+          Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
+            $parts = $_ -split '=', 2
+            $buildArgs += "--build-arg"
+            $buildArgs += ($parts[0].Trim() + '=' + $parts[1].Trim())
+          }
+          $buildArgs += "."
+          docker @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
+          if ("${{ github.event_name }}" -ne "pull_request") {
+            docker push ${{ env.DEPS_IMAGE }}:latest
+            if ($LASTEXITCODE -ne 0) { throw "docker push (deps) failed" }
+          } else {
+            Write-Host "Skipping push (pull_request event - read-only token)" -ForegroundColor Yellow
+          }
 
       # --------------------------------------------------------
       # 4a. Derive version from git tag (v1.2.3 → 1.2.3)
@@ -119,27 +128,23 @@ jobs:
       - name: Build Docker image
         shell: powershell
         run: |
-          docker build `
-            --isolation=hyperv `
-            -f Dockerfile.windows `
-            -t houndtts-builder-msvc `
-            --target output `
-            --build-arg HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }} `
-            --build-arg HOUNDTTS_VERSION_FULL=${{ steps.version.outputs.FULL_VERSION }} `
-            .
+          $buildArgs = @("build", "--isolation=hyperv", "-f", "Dockerfile.windows",
+            "-t", "houndtts-builder-msvc",
+            "--target", "output",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:latest",
+            "--build-arg", "HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }}",
+            "--build-arg", "HOUNDTTS_VERSION_FULL=${{ steps.version.outputs.FULL_VERSION }}")
+          Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
+            $parts = $_ -split '=', 2
+            $buildArgs += "--build-arg"
+            $buildArgs += ($parts[0].Trim() + '=' + $parts[1].Trim())
+          }
+          $buildArgs += "."
+          docker @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw "docker build (output) failed" }
 
       # --------------------------------------------------------
-      # 5. Save deps layer to cache (only on cache miss)
-      # --------------------------------------------------------
-      - name: Save deps image to cache
-        if: steps.docker-cache.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force C:\docker-cache | Out-Null
-          docker save houndtts-deps -o C:\docker-cache\houndtts-deps.tar
-
-      # --------------------------------------------------------
-      # 6. Extract dist from the container
+      # 5. Extract dist from the container
       # --------------------------------------------------------
       - name: Extract dist
         shell: powershell
