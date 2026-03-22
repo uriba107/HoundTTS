@@ -8,7 +8,7 @@ $c = [System.IO.File]::ReadAllText($f)
 # Patch 1: Session constructor
 $old1lf   = "synth->session = std::make_unique<Ort::Session>(`n        Ort::Session(ort_env, model_path, synth->session_options));"
 $old1crlf = "synth->session = std::make_unique<Ort::Session>(`r`n        Ort::Session(ort_env, model_path, synth->session_options));"
-$new1     = "std::wstring _mp(model_path, model_path + strlen(model_path));`n    synth->session = std::make_unique<Ort::Session>(ort_env, _mp.c_str(), synth->session_options);"
+$new1     = "std::wstring _mp = std::filesystem::path(model_path).wstring();`n    synth->session = std::make_unique<Ort::Session>(ort_env, _mp.c_str(), synth->session_options);"
 
 if ($c.Contains($old1lf)) {
     $c = $c.Replace($old1lf, $new1)
@@ -29,6 +29,15 @@ if ($c.Contains($old2)) {
     Write-Host "patch2 applied"
 } else {
     throw "patch2: GetOutputNames pattern not found in piper.cpp"
+}
+
+# Patch 3: Add #include <filesystem> for std::filesystem::path (used by patch 1)
+$fsInclude = '#include <filesystem>'
+if (-not $c.Contains($fsInclude)) {
+    $c = $c.Replace('#include <limits>', "#include <limits>`n#include <filesystem>")
+    Write-Host "patch3 applied (added <filesystem> include)"
+} else {
+    Write-Host "patch3 skipped (<filesystem> already present)"
 }
 
 [System.IO.File]::WriteAllText($f, $c)

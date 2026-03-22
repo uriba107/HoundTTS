@@ -4,6 +4,7 @@
 
 namespace HoundTTS {
 
+static const int kMaxIdlePerModel = 4;
 static const char* kTag = "HoundTTS/PiperModelPool";
 static void LogE(const std::string& msg) { Logger::Instance().Error(kTag, msg); }
 static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
@@ -50,7 +51,13 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
 void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* synth) {
     if (!synth) return;
     std::lock_guard<std::mutex> lock(poolMutex_);
-    pool_[modelPath].push_back(synth);
+    auto& idle = pool_[modelPath];
+    if (static_cast<int>(idle.size()) < kMaxIdlePerModel) {
+        idle.push_back(synth);
+    } else {
+        LogI("Pool cap reached for model, destroying excess instance: " + modelPath);
+        PiperNative::Instance().Free(synth);
+    }
 }
 
 int PiperModelPool::StartSynthesize(piper_synthesizer* synth, const char* text,

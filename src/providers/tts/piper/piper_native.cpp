@@ -25,14 +25,19 @@ bool PiperNative::Load(const std::string& dllDir) {
 
     LogI("Loading piper.dll from: " + dllPath);
 
-    // Add the DLL directory to the search path so onnxruntime.dll resolves
+    // Scope DLL search directory so onnxruntime.dll (dependency) resolves
+    // without touching the process-wide SetDllDirectoryW state.
     std::wstring wDllDir = Utils::Utf8ToWide(dllDir);
-    SetDllDirectoryW(wDllDir.c_str());
+    DLL_DIRECTORY_COOKIE cookie = AddDllDirectory(wDllDir.c_str());
+    if (!cookie) {
+        LogE("AddDllDirectory failed (GLE=" + std::to_string(GetLastError()) + ")");
+    }
 
-    hDll_ = LoadLibraryW(Utils::Utf8ToWide(dllPath).c_str());
+    hDll_ = LoadLibraryExW(Utils::Utf8ToWide(dllPath).c_str(), nullptr,
+                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!hDll_) {
         LogE("LoadLibrary failed for piper.dll (GLE=" + std::to_string(GetLastError()) + ") — piper.exe subprocess fallback active");
-        SetDllDirectoryW(nullptr);
+        if (cookie) RemoveDllDirectory(cookie);
         return false;
     }
 
@@ -42,7 +47,7 @@ bool PiperNative::Load(const std::string& dllDir) {
     fn_start_    = (PFN_piper_synthesize_start)          GetProcAddress(hDll_, "piper_synthesize_start");
     fn_next_     = (PFN_piper_synthesize_next)           GetProcAddress(hDll_, "piper_synthesize_next");
 
-    SetDllDirectoryW(nullptr);
+    if (cookie) RemoveDllDirectory(cookie);
 
     if (!fn_create_ || !fn_free_ || !fn_defaults_ || !fn_start_ || !fn_next_) {
         LogE("piper.dll loaded but missing one or more required exports — disabling");

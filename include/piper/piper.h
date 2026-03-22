@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <uchar.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,7 +26,7 @@ typedef struct piper_audio_chunk {
   size_t num_samples;
   int sample_rate;
   bool is_last;
-  const char32_t *phonemes;
+  const uint32_t *phonemes;
   size_t num_phonemes;
   const int *phoneme_ids;
   size_t num_phoneme_ids;

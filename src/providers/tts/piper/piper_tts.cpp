@@ -11,6 +11,7 @@
 #include <cstring>
 #include <algorithm>
 #include <limits>
+#include <charconv>
 
 namespace HoundTTS {
 
@@ -56,20 +57,27 @@ static std::string LookupSpeakerId(const std::string& json, const std::string& n
     return id;
 }
 
+static int SafeStoi(const std::string& s, int fallback = 0) {
+    if (s.empty()) return fallback;
+    int val = 0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), val);
+    return (ec == std::errc{} && ptr == s.data() + s.size()) ? val : fallback;
+}
+
 static int ResolveSpeakerId(const std::string& modelJson, const std::string& speaker) {
     if (speaker.empty() || modelJson.empty()) return 0;
     int numSpeakers = ParseNumSpeakers(modelJson);
     if (numSpeakers <= 1) return 0;
     bool isNumeric = speaker.find_first_not_of("0123456789") == std::string::npos;
     if (isNumeric) {
-        int parsed = std::stoi(speaker);
+        int parsed = SafeStoi(speaker);
         if (parsed < numSpeakers) return parsed;
         // out-of-range numeric: try as name before falling back to 0
         std::string resolved = LookupSpeakerId(modelJson, speaker);
-        return resolved.empty() ? 0 : std::stoi(resolved);
+        return SafeStoi(resolved);
     }
     std::string resolved = LookupSpeakerId(modelJson, speaker);
-    return resolved.empty() ? 0 : std::stoi(resolved);
+    return SafeStoi(resolved);
 }
 
 static std::string ReadModelJson(const std::string& modelPath) {
@@ -209,10 +217,12 @@ bool PiperTTS::SynthesizeViaNative(
     // Inference loop (fully parallel across concurrent requests)
     piper_audio_chunk chunk{};
     int totalSamples = 0;
+    bool failed = false;
     while (true) {
         rc = native.SynthesizeNext(synth, &chunk);
         if (rc == PIPER_ERR_GENERIC) {
             LogE("piper_synthesize_next error");
+            failed = true;
             break;
         }
 
@@ -240,10 +250,13 @@ bool PiperTTS::SynthesizeViaNative(
         if (rc == PIPER_DONE || chunk.is_last) break;
     }
 
-    LogI("native synthesis complete, total output samples: " + std::to_string(totalSamples));
+    if (failed)
+        LogE("native synthesis failed after " + std::to_string(totalSamples) + " samples");
+    else
+        LogI("native synthesis complete, total output samples: " + std::to_string(totalSamples));
     pool.Release(modelPath, synth);
     queue.MarkDone();
-    return true;
+    return !failed;
 }
 
 // ---------------------------------------------------------------------------

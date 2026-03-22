@@ -77,7 +77,20 @@ void ConfigReader::ParseIni(const std::string& content) {
             val = val.substr(1, val.size() - 2);
 
         if (section == "Piper") {
-            if (key == "path")       piperPath_      = val;
+            if (key == "path" || key == "exe" || key == "dll_path") {
+                // Normalize: strip trailing piper.exe or piper.dll to get directory
+                auto endsWithCI = [](const std::string& s, const std::string& suffix) {
+                    if (s.size() < suffix.size()) return false;
+                    std::string tail = s.substr(s.size() - suffix.size());
+                    for (auto& c : tail) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+                    return tail == suffix;
+                };
+                if (endsWithCI(val, "\\piper.exe") || endsWithCI(val, "/piper.exe") ||
+                    endsWithCI(val, "\\piper.dll") || endsWithCI(val, "/piper.dll")) {
+                    val = val.substr(0, val.find_last_of("\\/"));
+                }
+                piperPath_ = val;
+            }
             if (key == "voice_path") piperVoicePath_ = val;
         } else if (section == "Google") {
             if (key == "credentials_file") googleCredsFile_ = val;
