@@ -31,7 +31,7 @@ Download the latest release from [GitHub releases](https://github.com/uriba107/H
 Each release includes two archives:
 
 - **`HoundTTS-windows.zip`** — the full working package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started.**
-- **`HoundTTS-piper-addon-windows.zip`** — an optional add-on, as the name states. Contains only the [Piper TTS](https://github.com/piper-tts-go/piper) engine binaries and bundled voice models (~150 MB). Install this in addition to the base package if you want to use Piper TTS. On future updates you only need to re-download the base package — the piper add-on stays valid unless Piper itself is updated.
+- **`HoundTTS-piper-addon-windows.zip`** — an optional add-on, as the name states. Contains `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3), `onnxruntime.dll`, `espeak-ng-data/`, and bundled voice models (~150 MB). Install this in addition to the base package if you want to use Piper TTS. The DLL keeps voice models loaded between calls, eliminating per-call cold-start latency. On future updates you only need to re-download the base package — the piper add-on stays valid unless Piper itself is updated.
 
 > **Config files:** copy each `.example` file to the same name without `.example` and edit it. These files are never overwritten by updates — your live settings are safe.
 
@@ -44,10 +44,9 @@ Saved Games\DCS\
 │   ├── bin\
 │   │   ├── HoundTTS.dll
 │   │   └── piper\                    ← from piper-addon (Piper TTS only)
-│   │       ├── piper.exe
-│   │       ├── espeak-ng.dll
+│   │       ├── piper.dll             ← in-process TTS engine (GPLv3)
 │   │       ├── onnxruntime.dll
-│   │       └── ...
+│   │       └── espeak-ng-data\
 │   ├── voices\                       ← from piper-addon
 │   │   ├── en_US-lessac-low.onnx
 │   │   ├── en_US-lessac-low.onnx.json
@@ -93,7 +92,7 @@ All providers are selected per-call via the `provider` field in `HoundTTS.Transm
 
 ### Piper (offline, bundled)
 
-Connects directly to SRS over TCP/UDP. Synthesizes speech via [piper-tts-go/piper](https://github.com/piper-tts-go/piper). **No internet or API key required.** `piper.exe` and two bundled voice models are included in `dist\piper-addon\`.
+**No internet or API key required.** Synthesizes speech in-process via `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3). Voice models stay loaded between calls — no per-call cold-start. Two bundled voice models and all dependencies are included in `HoundTTS-piper-addon-windows.zip`.
 
 ```lua
 HoundTTS.Transmit("Bogey, bullseye 270 for 15",
@@ -332,8 +331,9 @@ Copy `HoundTTS-credentials.ini.example` → `HoundTTS-credentials.ini` in the sa
 
 ```ini
 [Piper]
-; Path to piper.exe — leave blank to use bundled bin\piper\piper.exe
-exe =
+; Path to the piper binary directory (containing piper.dll or piper.exe)
+; Leave blank to use bundled bin\piper\ folder (from the piper-addon package)
+path =
 ; Path to folder containing .onnx voice model files
 ; Leave blank to use bundled voices\ folder
 voice_path =
@@ -559,10 +559,10 @@ HoundTTS.Translate("Two contacts, BULLSEYE 270 for 40",
 
 **`provider_params`** (table):
 
-| Field    | Type   | Default    | Description                                                                                            |
-| -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------ |
-| provider | string | `"openai"` | `"openai"`, `"google"` (`"gcloud"`), `"libretranslate"` (`"libre"`), `"aws"` (`"polly"`), or `"azure"` |
-| language | string | `"en"`     | ISO 639-1 code e.g. `"de"`, `"fr"`, `"ru"`, `"he"` — full names like `"German"` also accepted          |
+| Field    | Type   | Default    | Description                                                                                                                                                                   |
+| -------- | ------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| provider | string | `"openai"` | `"openai"`, `"google"` (`"gcloud"`), `"libretranslate"` (`"libre"`), `"aws"` (`"polly"`), or `"azure"`                                                                        |
+| language | string | `"en"`     | ISO 639-1 two-letter code e.g. `"de"`, `"fr"`, `"ru"`, `"he"` — see [Wikipedia: List of ISO 639 language codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes) |
 
 The HTTP request runs on a DLL background thread. A `timer.scheduleFunction` polls for the result every 0.5 seconds and invokes the callback — DCS is never blocked.
 

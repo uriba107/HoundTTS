@@ -47,7 +47,7 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
 
     // Capture config values
     auto& cfg = ConfigReader::Instance();
-    std::string piperExe        = cfg.GetPiperExe();
+    std::string piperPath       = cfg.GetPiperPath();
     std::string piperVoicePath  = cfg.GetPiperVoicePath();
     std::string azureKey        = cfg.GetAzureKey();
     std::string azureRegion     = cfg.GetAzureRegion();
@@ -147,8 +147,8 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             piperModel += ".onnx";
 
         // Streaming: detach synthesis thread so consumer can start immediately
-        std::thread([message, piperModel, piperExe, speaker, speed, volume, queue]() {
-            PiperTTS::SynthesizeToQueue(message, piperModel, piperExe, speaker, speed, volume, *queue);
+        std::thread([message, piperModel, piperPath, speaker, speed, volume, queue]() {
+            PiperTTS::SynthesizeToQueue(message, piperModel, piperPath, speaker, speed, volume, *queue);
         }).detach();
 
     } else if (provider == TtsProvider::Azure) {

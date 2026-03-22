@@ -73,6 +73,8 @@ add_library(HoundTTS SHARED
     # TTS providers
     src/providers/tts/sapi/sapi_tts.cpp
     src/providers/tts/piper/piper_tts.cpp
+    src/providers/tts/piper/piper_native.cpp
+    src/providers/tts/piper/piper_model_pool.cpp
     src/providers/tts/azure/azure_tts.cpp
     src/providers/tts/google/google_tts.cpp
     src/providers/tts/elevenlabs/elevenlabs_tts.cpp

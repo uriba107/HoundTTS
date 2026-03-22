@@ -3,9 +3,28 @@
 #ifndef HOUNDTTS_PROVIDER_H
 #define HOUNDTTS_PROVIDER_H
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 namespace HoundTTS {
+
+inline std::string NormalizeProviderToken(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) {
+        ++start;
+    }
+
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+        --end;
+    }
+
+    std::string token = s.substr(start, end - start);
+    std::transform(token.begin(), token.end(), token.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return token;
+}
 
 // -------------------------------------------------------------------------
 // TTS provider enum — single source of truth for all provider names/aliases.
@@ -23,14 +42,16 @@ enum class TtsProvider {
 };
 
 inline TtsProvider ParseTtsProvider(const std::string& s) {
-    if (s.empty() || s == "sapi" || s == "win")       return TtsProvider::Sapi;
-    if (s == "piper")                                  return TtsProvider::Piper;
-    if (s == "azure")                                  return TtsProvider::Azure;
-    if (s == "google" || s == "gcloud")                return TtsProvider::Google;
-    if (s == "elevenlabs")                             return TtsProvider::ElevenLabs;
-    if (s == "aws" || s == "polly")                    return TtsProvider::AWS;
-    if (s == "kittentts" || s == "kitten_tts" || s == "kitten") return TtsProvider::KittenTTS;
-    if (s == "openai")                                 return TtsProvider::OpenAI;
+    const std::string token = NormalizeProviderToken(s);
+
+    if (token.empty() || token == "sapi" || token == "win")       return TtsProvider::Sapi;
+    if (token == "piper")                                            return TtsProvider::Piper;
+    if (token == "azure")                                            return TtsProvider::Azure;
+    if (token == "google" || token == "gcloud")                         return TtsProvider::Google;
+    if (token == "elevenlabs")                                       return TtsProvider::ElevenLabs;
+    if (token == "aws" || token == "polly" || token == "amazon")            return TtsProvider::AWS;
+    if (token == "kittentts" || token == "kitten_tts" || token == "kitten") return TtsProvider::KittenTTS;
+    if (token == "openai")                                                  return TtsProvider::OpenAI;
     return TtsProvider::Unknown;
 }
 
@@ -62,12 +83,14 @@ enum class TranslateProvider {
 };
 
 inline TranslateProvider ParseTranslateProvider(const std::string& s) {
-    if (s.empty())                                     return TranslateProvider::None;
-    if (s == "openai")                                 return TranslateProvider::OpenAI;
-    if (s == "google" || s == "gcloud")                return TranslateProvider::Google;
-    if (s == "libretranslate" || s == "libre")         return TranslateProvider::LibreTranslate;
-    if (s == "aws" || s == "polly")                    return TranslateProvider::AWS;
-    if (s == "azure")                                  return TranslateProvider::Azure;
+    const std::string token = NormalizeProviderToken(s);
+
+    if (token.empty())                                           return TranslateProvider::None;
+    if (token == "openai")                                       return TranslateProvider::OpenAI;
+    if (token == "google" || token == "gcloud")                  return TranslateProvider::Google;
+    if (token == "libretranslate" || token == "libre")           return TranslateProvider::LibreTranslate;
+    if (token == "aws" || token == "polly" || token == "amazon") return TranslateProvider::AWS;
+    if (token == "azure")                                        return TranslateProvider::Azure;
     return TranslateProvider::Unknown;
 }
 

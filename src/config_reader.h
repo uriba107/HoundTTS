@@ -20,7 +20,7 @@ public:
     void Load(const std::string& writedir);
 
     // [Piper]
-    std::string GetPiperExe() const;
+    std::string GetPiperPath() const;     // dir containing piper.dll (or piper.exe fallback)
     std::string GetPiperVoicePath() const;
 
     // [Google]
@@ -71,7 +71,7 @@ private:
     bool loaded_ = false;
     std::string writedir_;
 
-    std::string piperExe_;
+    std::string piperPath_;
     std::string piperVoicePath_;
     std::string googleCredsFile_;
     std::string azureKey_;
