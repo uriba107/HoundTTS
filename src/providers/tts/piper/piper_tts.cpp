@@ -56,6 +56,22 @@ static std::string LookupSpeakerId(const std::string& json, const std::string& n
     return id;
 }
 
+static int ResolveSpeakerId(const std::string& modelJson, const std::string& speaker) {
+    if (speaker.empty() || modelJson.empty()) return 0;
+    int numSpeakers = ParseNumSpeakers(modelJson);
+    if (numSpeakers <= 1) return 0;
+    bool isNumeric = speaker.find_first_not_of("0123456789") == std::string::npos;
+    if (isNumeric) {
+        int parsed = std::stoi(speaker);
+        if (parsed < numSpeakers) return parsed;
+        // out-of-range numeric: try as name before falling back to 0
+        std::string resolved = LookupSpeakerId(modelJson, speaker);
+        return resolved.empty() ? 0 : std::stoi(resolved);
+    }
+    std::string resolved = LookupSpeakerId(modelJson, speaker);
+    return resolved.empty() ? 0 : std::stoi(resolved);
+}
+
 static std::string ReadModelJson(const std::string& modelPath) {
     std::string jsonPath = modelPath + ".json";
     HANDLE hFile = CreateFileW(
@@ -169,21 +185,9 @@ bool PiperTTS::SynthesizeViaNative(
         return false;
     }
 
-    // Resolve speaker ID
-    int speakerId = 0;
-    if (!speaker.empty()) {
-        std::string modelJson = ReadModelJson(modelPath);
-        if (!modelJson.empty() && ParseNumSpeakers(modelJson) > 1) {
-            bool isNumeric = speaker.find_first_not_of("0123456789") == std::string::npos;
-            if (isNumeric) {
-                speakerId = std::stoi(speaker);
-            } else {
-                std::string resolved = LookupSpeakerId(modelJson, speaker);
-                if (!resolved.empty())
-                    speakerId = std::stoi(resolved);
-            }
-        }
-    }
+    // Resolve speaker ID (numeric or named, with bounds check and name fallback)
+    std::string modelJson = ReadModelJson(modelPath);
+    int speakerId = ResolveSpeakerId(modelJson, speaker);
 
     // Build synthesis options
     piper_synthesize_options opts = native.DefaultOptions(synth);
@@ -259,18 +263,11 @@ bool PiperTTS::SynthesizeViaSubprocess(
     int sampleRate = modelJson.empty() ? 0 : ParseSampleRate(modelJson);
     if (sampleRate == 0) { LogE("could not read sample_rate, defaulting to 22050"); sampleRate = 22050; }
 
+    int resolvedSpeakerId = ResolveSpeakerId(modelJson, speaker);
     std::string speakerArg;
-    if (!speaker.empty() && !modelJson.empty()) {
-        int numSpeakers = ParseNumSpeakers(modelJson);
-        if (numSpeakers > 1) {
-            bool isNumeric = speaker.find_first_not_of("0123456789") == std::string::npos;
-            if (isNumeric) speakerArg = speaker;
-            else {
-                std::string resolved = LookupSpeakerId(modelJson, speaker);
-                speakerArg = resolved.empty() ? speaker : resolved;
-            }
-            LogI("speaker arg: " + speakerArg);
-        }
+    if (!speaker.empty() && ParseNumSpeakers(modelJson) > 1) {
+        speakerArg = std::to_string(resolvedSpeakerId);
+        LogI("speaker arg: " + speakerArg);
     }
 
     std::string exePath = ResolvePiperExe(piperPath);
