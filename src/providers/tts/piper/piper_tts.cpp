@@ -268,7 +268,7 @@ bool PiperTTS::SynthesizeViaSubprocess(
     const std::string& modelPath,
     const std::string& piperPath,
     const std::string& speaker,
-    double /*speed*/,
+    double speed,
     double volume,
     PCMQueue& queue)
 {
@@ -291,6 +291,13 @@ bool PiperTTS::SynthesizeViaSubprocess(
     std::wstring cmdLine = L"\"" + wExe + L"\" --model \"" + wModel + L"\" --output-raw";
     if (!speakerArg.empty())
         cmdLine += L" --speaker " + Utils::Utf8ToWide(speakerArg);
+    if (speed > 0.0 && speed != 1.0) {
+        // piper.exe --length_scale: 0.5 = 2x faster, 2.0 = 2x slower (inverse of speed)
+        double lengthScale = 1.0 / speed;
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4f", lengthScale);
+        cmdLine += L" --length_scale " + Utils::Utf8ToWide(std::string(buf));
+    }
 
     HANDLE hStdinRd = nullptr, hStdinWr = nullptr;
     HANDLE hStdoutRd = nullptr, hStdoutWr = nullptr;
