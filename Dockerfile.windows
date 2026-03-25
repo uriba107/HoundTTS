@@ -91,16 +91,16 @@ ARG PIPER1_GPL_TAG=v1.4.1
 RUN git clone --branch %PIPER1_GPL_TAG% --depth 1 \
     https://github.com/OHF-Voice/piper1-gpl.git C:\piper1-gpl
 
-# Patch piper.cpp for onnxruntime 1.21.0 API (see patch_piper.ps1 in repo root)
+# Patch piper for onnxruntime 1.22.0 API + DLL-safe init (see patch_piper.ps1)
 ARG PIPER_PATCH_VER=1
 COPY tools/patch_piper.ps1 C:/tools/
 RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_piper.ps1
 
 
-# Pre-download onnxruntime 1.21.0
+# Pre-download onnxruntime 1.22.0
 # Place it where libpiper's CMakeLists expects ONNXRUNTIME_DIR
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "$url = 'https://github.com/microsoft/onnxruntime/releases/download/v1.21.0/onnxruntime-win-x64-1.21.0.zip'; \
+    "$url = 'https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip'; \
      $zip = 'C:\ort.zip'; \
      Invoke-WebRequest -Uri $url -OutFile $zip; \
      Expand-Archive -Path $zip -DestinationPath 'C:\ort'; \
@@ -113,7 +113,8 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
       -G "NMake Makefiles" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=C:\piper1-install \
-      -DONNXRUNTIME_DIR=C:/ort/onnxruntime-win-x64-1.21.0 \
+      -DONNXRUNTIME_DIR=C:/ort/onnxruntime-win-x64-1.22.0 \
+      -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
       "-DCMAKE_CXX_FLAGS=/DESPEAK_API= /utf-8" && \
     cmake --build C:\piper1-build --target espeak_ng_external
 

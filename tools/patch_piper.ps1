@@ -1,14 +1,17 @@
-# Patch piper.cpp for onnxruntime 1.21.0 API compatibility
+# Patch piper for onnxruntime 1.22.0 API compatibility + DLL-safe init
 # 1) Session constructor: const char* -> wchar_t* (removed in ORT >= 1.17 on Windows)
 # 2) GetOutputNames(): use GetOutputNameAllocated() loop (GetOutputNames never in released builds)
+# 3) Add #include <filesystem> for std::filesystem::path (used by patch 1)
+# 4) piper_impl.hpp: replace global Ort::Env with lazy-init accessor (GLE 1114 fix)
+# 5) piper.cpp: use ort_env() accessor instead of bare global
 
 $f = 'C:\piper1-gpl\libpiper\src\piper.cpp'
 $c = [System.IO.File]::ReadAllText($f)
 
-# Patch 1: Session constructor
+# Patch 1: Session constructor (uses ort_env() accessor from patch 5)
 $old1lf   = "synth->session = std::make_unique<Ort::Session>(`n        Ort::Session(ort_env, model_path, synth->session_options));"
 $old1crlf = "synth->session = std::make_unique<Ort::Session>(`r`n        Ort::Session(ort_env, model_path, synth->session_options));"
-$new1     = "std::wstring _mp = std::filesystem::path(model_path).wstring();`n    synth->session = std::make_unique<Ort::Session>(ort_env, _mp.c_str(), synth->session_options);"
+$new1     = "std::wstring _mp = std::filesystem::path(model_path).wstring();`n    synth->session = std::make_unique<Ort::Session>(ort_env(), _mp.c_str(), synth->session_options);"
 
 if ($c.Contains($old1lf)) {
     $c = $c.Replace($old1lf, $new1)
@@ -40,5 +43,33 @@ if (-not $c.Contains($fsInclude)) {
     Write-Host "patch3 skipped (<filesystem> already present)"
 }
 
+# Patch 4 (NEW): replace ort_env bare reference with ort_env() call
+# After patches 1-3, the only remaining bare ort_env in piper.cpp is gone
+# (patch 1 already emits ort_env()), but guard against future occurrences.
+# No-op if patch 1 already converted all uses.
+
 [System.IO.File]::WriteAllText($f, $c)
 Write-Host "piper.cpp patched OK"
+
+# ---- Patch piper_impl.hpp ----
+# Patch 5: Replace global Ort::Env with lazy-initialized function.
+# The global constructor runs under DllMain loader lock, which is illegal
+# for heavy init like ORT thread pools/providers -> GLE 1114.
+$h = 'C:\piper1-gpl\libpiper\include\piper_impl.hpp'
+$hc = [System.IO.File]::ReadAllText($h)
+
+$old5 = 'Ort::Env ort_env{ORT_LOGGING_LEVEL_WARNING, "piper"};'
+$new5 = @'
+inline Ort::Env& ort_env() {
+    static Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "piper"};
+    return env;
+}
+'@
+
+if ($hc.Contains($old5)) {
+    $hc = $hc.Replace($old5, $new5)
+    [System.IO.File]::WriteAllText($h, $hc)
+    Write-Host "patch5 applied (piper_impl.hpp: lazy ort_env)"
+} else {
+    throw "patch5: global Ort::Env pattern not found in piper_impl.hpp"
+}
