@@ -46,7 +46,8 @@ Saved Games\DCS\
 │   │   └── piper\                    ← from piper-addon (Piper TTS only)
 │   │       ├── piper.dll             ← in-process TTS engine (GPLv3)
 │   │       ├── onnxruntime.dll
-│   │       └── espeak-ng-data\
+│   │       ├── espeak-ng-data\
+│   │       └── COPYING               ← GPLv3 license for piper.dll
 │   ├── voices\                       ← from piper-addon
 │   │   ├── en_US-lessac-low.onnx
 │   │   ├── en_US-lessac-low.onnx.json
@@ -730,6 +731,12 @@ build.bat
 ```
 
 Auto-detects MinGW or MSVC CLI, generates the import library from `lua.dll`, builds the DLL, and copies everything to `dist\`.
+
+## License
+
+HoundTTS itself is released under the **MIT License** — see [LICENSE](LICENSE).
+
+The **piper-addon** (`HoundTTS-piper-addon-windows.zip`) contains `piper.dll`, built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl) and distributed under the **GNU General Public License v3.0 (GPLv3)**. The full license text is included in the add-on as `bin\piper\COPYING`. Source code is available at the repository linked above.
 
 ## Acknowledgements
 

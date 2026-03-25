@@ -140,7 +140,8 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      Copy-Item 'C:\piper1-install\piper.dll'                             'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
      Copy-Item 'C:\piper1-install\lib\onnxruntime.dll'                  'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
      Copy-Item -Recurse 'C:\piper1-install\espeak-ng-data'              'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
-     Copy-Item -Recurse -Force 'C:\deps\voices\*'                       'C:\dist\piper-addon\Mods\Services\HoundTTS\voices'"
+     Copy-Item -Recurse -Force 'C:\deps\voices\*'                       'C:\dist\piper-addon\Mods\Services\HoundTTS\voices'; \
+     Copy-Item 'C:\piper1-gpl\COPYING'                                    'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper\COPYING'"
 
 # ============================================================
 # Stage 3: build — copy source, compile, assemble dist/base
