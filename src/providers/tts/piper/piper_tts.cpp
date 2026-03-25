@@ -376,7 +376,7 @@ bool PiperTTS::SynthesizeViaSubprocess(
     GetExitCodeProcess(pi.hProcess, &exitCode);
     if (exitCode != 0) LogE("piper.exe exit code: " + std::to_string(exitCode));
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-    return true;
+    return exitCode == 0;
 }
 
 } // namespace HoundTTS
