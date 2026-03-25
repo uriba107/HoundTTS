@@ -649,7 +649,7 @@ src/
     │   ├── openai/
     │   │   └── openai_tts.*       # OpenAI-compatible TTS REST API (+ LocalAI)
     │   ├── piper/
-    │   │   └── piper_tts.*        # CreateProcess piper.exe, PCM→Opus streaming
+    │   │   └── piper_tts.*        # In-process piper.dll synthesis (deprecated piper.exe fallback)
     │   ├── aws/
     │   │   └── aws_tts.*          # AWS Polly REST API
     │   └── sapi/
