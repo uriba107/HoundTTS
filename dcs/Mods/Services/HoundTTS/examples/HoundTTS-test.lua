@@ -141,7 +141,7 @@ local tests = {
       volume = 0.25 },
 
     -- Piper (local offline TTS, no credentials needed)
-    -- Requires the piper-addon package. Voice is .onnx model filename in voices\ folder.
+    -- Requires the piper-engine package. Voice is .onnx model filename in voices\ folder.
     { "Piper en_US-lessac-low",
       "Piper offline TTS. Lessac low quality model.",
       "Piper-lessac",

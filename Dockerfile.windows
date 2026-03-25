@@ -1,8 +1,9 @@
 # Windows container build — requires a Windows Docker host with Windows containers enabled.
 # Produces the same /dist layout as the Linux/MinGW Dockerfile.
 #
-# Two-stage build:
+# Multi-stage build:
 #   deps  — Chocolatey + VS Build Tools + vcpkg + OpenSSL (~15 GB, cached after first run)
+#   piper — clone piper1-gpl + compile piper.dll
 #   build — COPY source + compile + assemble dist (fast, runs on every code change)
 #
 # Usage (from PowerShell on the Windows host):
@@ -133,15 +134,18 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
     cmake --build C:\piper1-build --config Release && \
     cmake --install C:\piper1-build
 
-# Assemble piper-addon dist
+# Assemble piper-engine dist (DLLs + espeak-ng-data + license — ~16 MB)
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "New-Item -ItemType Directory -Force 'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
-     New-Item -ItemType Directory -Force 'C:\dist\piper-addon\Mods\Services\HoundTTS\voices' | Out-Null; \
-     Copy-Item 'C:\piper1-install\piper.dll'                             'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
-     Copy-Item 'C:\piper1-install\lib\onnxruntime.dll'                  'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
-     Copy-Item -Recurse 'C:\piper1-install\espeak-ng-data'              'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
-     Copy-Item -Recurse -Force 'C:\deps\voices\*'                       'C:\dist\piper-addon\Mods\Services\HoundTTS\voices'; \
-     Copy-Item 'C:\piper1-gpl\COPYING'                                    'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper\COPYING'"
+    "New-Item -ItemType Directory -Force 'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
+     Copy-Item 'C:\piper1-install\piper.dll'                             'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item 'C:\piper1-install\lib\onnxruntime.dll'                  'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item -Recurse 'C:\piper1-install\espeak-ng-data'              'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item 'C:\piper1-gpl\COPYING'                                    'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper\COPYING'"
+
+# Assemble piper-voices dist (bundled voice models — ~120 MB)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "New-Item -ItemType Directory -Force 'C:\dist\piper-voices\Mods\Services\HoundTTS\voices' | Out-Null; \
+     Copy-Item -Recurse -Force 'C:\deps\voices\*'                       'C:\dist\piper-voices\Mods\Services\HoundTTS\voices'"
 
 # ============================================================
 # Stage 3: build — copy source, compile, assemble dist/base
@@ -194,8 +198,9 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS output
 
-COPY --from=build C:\\dist\\base         C:\\dist\\base
-COPY --from=piper C:\\dist\\piper-addon  C:\\dist\\piper-addon
+COPY --from=build C:\\dist\\base           C:\\dist\\base
+COPY --from=piper C:\\dist\\piper-engine   C:\\dist\\piper-engine
+COPY --from=piper C:\\dist\\piper-voices   C:\\dist\\piper-voices
 
 # Copy dist to C:\output on run
 CMD xcopy /E /I /Y C:\\dist C:\\output

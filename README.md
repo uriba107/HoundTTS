@@ -28,10 +28,11 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 
 Download the latest release from [GitHub releases](https://github.com/uriba107/HoundTTS/releases) and extract it into your DCS Saved Games folder (e.g. `%USERPROFILE%\Saved Games\DCS\`).
 
-Each release includes two archives:
+Each release includes three archives:
 
-- **`HoundTTS-windows.zip`** — the full working package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started.**
-- **`HoundTTS-piper-addon-windows.zip`** — an optional add-on, as the name states. Contains `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3), `onnxruntime.dll`, `espeak-ng-data/`, and bundled voice models (~150 MB). Install this in addition to the base package if you want to use Piper TTS. The DLL keeps voice models loaded between calls, eliminating per-call cold-start latency. On future updates you only need to re-download the base package — the piper add-on stays valid unless Piper itself is updated.
+- **`HoundTTS-windows.zip`** — the base package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started** (with cloud or SAPI providers).
+- **`HoundTTS-piper-engine-windows.zip`** — the Piper TTS engine (~16 MB). Contains `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3), `onnxruntime.dll`, and `espeak-ng-data/`. Install this in addition to the base package if you want to use Piper TTS. The DLL keeps voice models loaded between calls, eliminating per-call cold-start latency. Only needs re-downloading when piper or onnxruntime is updated.
+- **`HoundTTS-piper-voices-windows.zip`** — two bundled English voice models (~120 MB). Download once, keep across updates. You can also skip this and download your own voices from [HuggingFace](https://huggingface.co/rhasspy/piper-voices) instead.
 
 > **Config files:** copy each `.example` file to the same name without `.example` and edit it. These files are never overwritten by updates — your live settings are safe.
 
@@ -43,12 +44,12 @@ Saved Games\DCS\
 ├── Mods\Services\HoundTTS\
 │   ├── bin\
 │   │   ├── HoundTTS.dll
-│   │   └── piper\                    ← from piper-addon (Piper TTS only)
+│   │   └── piper\                    ← from piper-engine
 │   │       ├── piper.dll             ← in-process TTS engine (GPLv3)
 │   │       ├── onnxruntime.dll
 │   │       ├── espeak-ng-data\
 │   │       └── COPYING               ← GPLv3 license for piper.dll
-│   ├── voices\                       ← from piper-addon
+│   ├── voices\                       ← from piper-voices (or bring your own)
 │   │   ├── en_US-lessac-low.onnx
 │   │   ├── en_US-lessac-low.onnx.json
 │   │   ├── en_US-ryan-low.onnx
@@ -93,7 +94,7 @@ All providers are selected per-call via the `provider` field in `HoundTTS.Transm
 
 ### Piper (offline, bundled)
 
-**No internet or API key required.** Synthesizes speech in-process via `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3). Voice models stay loaded between calls — no per-call cold-start. Two bundled voice models and all dependencies are included in `HoundTTS-piper-addon-windows.zip`.
+**No internet or API key required.** Synthesizes speech in-process via `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3). Voice models stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-piper-engine-windows.zip` and two bundled voice models in `HoundTTS-piper-voices-windows.zip`.
 
 ```lua
 HoundTTS.Transmit("Bogey, bullseye 270 for 15",
@@ -333,7 +334,7 @@ Copy `HoundTTS-credentials.ini.example` → `HoundTTS-credentials.ini` in the sa
 ```ini
 [Piper]
 ; Path to the piper binary directory (containing piper.dll or piper.exe)
-; Leave blank to use bundled bin\piper\ folder (from the piper-addon package)
+; Leave blank to use bundled bin\piper\ folder (from the piper-engine package)
 path =
 ; Path to folder containing .onnx voice model files
 ; Leave blank to use bundled voices\ folder
@@ -676,6 +677,12 @@ The `"kitten"` / `"kittentts"` / `"kitten_tts"` provider names will be removed. 
 
 **Action required:** migrate to `provider = "openai"` and point `[OpenAI] endpoint` at your Kitten TTS Server — see the [Kitten TTS section](#kitten-tts-self-hosted--deprecated) above for step-by-step instructions.
 
+**`piper.exe` subprocess fallback removed**
+
+Piper TTS now runs entirely in-process via `piper.dll` (shipped in the piper-engine package). The legacy `piper.exe` subprocess fallback is deprecated in the current release and will be removed in 0.3.x. If `piper.dll` fails to load, a deprecation warning is logged in `Logs\HoundTTS.log`.
+
+**Action required:** ensure you are using the piper-engine package (`HoundTTS-piper-engine-windows.zip`), which includes `piper.dll`, `onnxruntime.dll`, and `espeak-ng-data/`. Remove any standalone `piper.exe` from your installation — it is no longer needed or supported.
+
 ---
 
 #### 0.1.x → 0.2.x
@@ -721,7 +728,8 @@ The pipeline produces the following `dist\` layout:
 ```
 dist\
 ├── base\          ← DLL + Lua scripts (always install this)
-└── piper-addon\   ← Piper engine + bundled voices (install for Piper TTS)
+├── piper-engine\  ← Piper TTS engine (~16 MB, install for Piper TTS)
+└── piper-voices\  ← Bundled voice models (~120 MB, or bring your own)
 ```
 
 ### Windows (native, no Docker)
@@ -736,7 +744,7 @@ Auto-detects MinGW or MSVC CLI, generates the import library from `lua.dll`, bui
 
 HoundTTS itself is released under the **MIT License** — see [LICENSE](LICENSE).
 
-The **piper-addon** (`HoundTTS-piper-addon-windows.zip`) contains `piper.dll`, built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl) and distributed under the **GNU General Public License v3.0 (GPLv3)**. The full license text is included in the add-on as `bin\piper\COPYING`. Source code is available at the repository linked above.
+The **piper-engine** package (`HoundTTS-piper-engine-windows.zip`) contains `piper.dll`, built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl) and distributed under the **GNU General Public License v3.0 (GPLv3)**. The full license text is included as `bin\piper\COPYING`. Source code is available at the repository linked above.
 
 ## Acknowledgements
 

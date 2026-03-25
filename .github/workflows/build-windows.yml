@@ -167,11 +167,18 @@ jobs:
           path: dist/base/
           if-no-files-found: error
 
-      - name: Upload dist/piper-addon
+      - name: Upload dist/piper-engine
         uses: actions/upload-artifact@v4
         with:
-          name: HoundTTS-piper-addon-windows
-          path: dist/piper-addon/
+          name: HoundTTS-piper-engine-windows
+          path: dist/piper-engine/
+          if-no-files-found: error
+
+      - name: Upload dist/piper-voices
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoundTTS-piper-voices-windows
+          path: dist/piper-voices/
           if-no-files-found: error
 
       # --------------------------------------------------------
@@ -181,8 +188,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: powershell
         run: |
-          Compress-Archive -Path dist\base\*         -DestinationPath HoundTTS-windows.zip         -Force
-          Compress-Archive -Path dist\piper-addon\*  -DestinationPath HoundTTS-piper-addon-windows.zip  -Force
+          Compress-Archive -Path dist\base\*           -DestinationPath HoundTTS-windows.zip                  -Force
+          Compress-Archive -Path dist\piper-engine\*   -DestinationPath HoundTTS-piper-engine-windows.zip      -Force
+          Compress-Archive -Path dist\piper-voices\*   -DestinationPath HoundTTS-piper-voices-windows.zip      -Force
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -190,6 +198,7 @@ jobs:
         with:
           files: |
             HoundTTS-windows.zip
-            HoundTTS-piper-addon-windows.zip
+            HoundTTS-piper-engine-windows.zip
+            HoundTTS-piper-voices-windows.zip
           generate_release_notes: true
           draft: true

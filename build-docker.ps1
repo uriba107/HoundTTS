@@ -163,8 +163,9 @@ try {
     if ($LASTEXITCODE -ne 0) { Write-Error "docker cp failed."; exit 1 }
 } finally {
     docker --context $Context rm $containerId | Out-Null
-    Compress-Archive -Path (Join-Path $ScriptDir "dist\base\*")        -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-windows.zip")              -Force
-    Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-addon\*") -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-addon-windows.zip")  -Force
+    Compress-Archive -Path (Join-Path $ScriptDir "dist\base\*")          -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-windows.zip")                      -Force
+    Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-engine\*")  -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-engine-windows.zip")      -Force
+    Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-voices\*")  -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-voices-windows.zip")      -Force
 }
 
 
@@ -173,15 +174,16 @@ Write-Host "=== Build successful! ===" -ForegroundColor Green
 Write-Host "Output in: $OutputDir"
 Write-Host ""
 Write-Host "Packages:"
-Write-Host "  dist\base\        <- DLL + Lua scripts (ExternalAudio)"
-Write-Host "  dist\piper-addon\ <- Piper TTS engine + bundled voices"
-Write-Host "  release\          <- Zip packages"
+Write-Host "  dist\base\          <- DLL + Lua scripts"
+Write-Host "  dist\piper-engine\  <- Piper TTS engine (piper.dll + onnxruntime.dll + espeak-ng-data)"
+Write-Host "  dist\piper-voices\  <- Bundled Piper voice models (~120 MB)"
+Write-Host "  release\            <- Zip packages"
 Write-Host ""
 Write-Host "To install, copy the contents of the desired package(s) into:"
 Write-Host "  $env:USERPROFILE\Saved Games\DCS.openbeta\"
 Write-Host "  (or DCS\ for stable release)"
 Write-Host ""
-Write-Host "For Piper TTS, install both base\ and piper-addon\."
+Write-Host "For Piper TTS, install base\ + piper-engine\ + piper-voices\ (or bring your own voices)."
 Write-Host ""
 
 Stop-Transcript | Out-Null
