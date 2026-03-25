@@ -13,7 +13,6 @@ permissions:
   packages: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   DEPS_IMAGE: ghcr.io/uriba107/houndtts/houndtts-deps-win
 
 jobs:
@@ -27,7 +26,7 @@ jobs:
       # 1. Checkout
       # --------------------------------------------------------
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -69,7 +68,7 @@ jobs:
       # 3. Log in to ghcr.io and pull/refresh the deps layer cache
       # --------------------------------------------------------
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -161,21 +160,21 @@ jobs:
       # 7. Upload artifacts
       # --------------------------------------------------------
       - name: Upload dist/base
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: HoundTTS-windows
           path: dist/base/
           if-no-files-found: error
 
       - name: Upload dist/piper-engine
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: HoundTTS-piper-engine-windows
           path: dist/piper-engine/
           if-no-files-found: error
 
       - name: Upload dist/piper-voices
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: HoundTTS-piper-voices-windows
           path: dist/piper-voices/
