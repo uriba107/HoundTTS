@@ -43,7 +43,7 @@ static std::unordered_map<int, std::shared_ptr<TranslateResult>> s_trResults;
 //
 // message : string — text to translate
 // params  : table
-//   .provider         "openai" | "google" | "libretranslate" ("libre") | "aws" ("polly") | "azure"
+//   .provider         "openai" | "google" ("gcloud") | "libretranslate" ("libre") | "aws" ("polly") | "azure"
 //   .language         ISO 639-1 target code e.g. "de" (or full name e.g. "German")
 //   .source_language  ISO 639-1 source code, default "en" (LibreTranslate only)
 //

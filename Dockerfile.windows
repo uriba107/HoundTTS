@@ -1,8 +1,9 @@
 # Windows container build — requires a Windows Docker host with Windows containers enabled.
 # Produces the same /dist layout as the Linux/MinGW Dockerfile.
 #
-# Two-stage build:
+# Multi-stage build:
 #   deps  — Chocolatey + VS Build Tools + vcpkg + OpenSSL (~15 GB, cached after first run)
+#   piper — clone piper1-gpl + compile piper.dll
 #   build — COPY source + compile + assemble dist (fast, runs on every code change)
 #
 # Usage (from PowerShell on the Windows host):
@@ -65,18 +66,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
      -OutFile 'C:\deps\include\httplib.h'"
 
-# Piper release + voice models (large downloads, cache here not in build stage)
-ARG PIPER_VERSION=v2.0.0
-RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "$rel = $env:PIPER_VERSION; \
-     Write-Host \"Downloading piper $rel\"; \
-     Invoke-WebRequest -Uri \"https://github.com/piper-tts-go/piper/releases/download/$rel/piper_windows_amd64.zip\" \
-         -OutFile C:\piper.zip; \
-     Expand-Archive -Path C:\piper.zip -DestinationPath C:\piper_extracted; \
-     New-Item -ItemType Directory -Force -Path 'C:\deps\piper' | Out-Null; \
-     Copy-Item -Recurse 'C:\piper_extracted\piper\*' 'C:\deps\piper\'; \
-     Remove-Item -Recurse -Force C:\piper.zip, C:\piper_extracted"
-
+# Voice models (large downloads, cache here — used by piper stage)
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "$hf = 'https://huggingface.co/rhasspy/piper-voices/resolve/main'; \
      New-Item -ItemType Directory -Force -Path 'C:\deps\voices' | Out-Null; \
@@ -92,16 +82,70 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 
 
 # ============================================================
-# Stage 2: piper — assemble piper-addon from cached deps
-#           No source dependency; never reruns on code changes
+# Stage 2: piper — clone piper1-gpl + compile piper.dll from source
+#           Runs in parallel with the build stage (independent FROM deps)
+#           espeak-ng + onnxruntime are auto-fetched by libpiper's CMakeLists
 # ============================================================
 FROM deps AS piper
 
+ARG PIPER1_GPL_TAG=v1.4.1
+RUN git clone --branch %PIPER1_GPL_TAG% --depth 1 \
+    https://github.com/OHF-Voice/piper1-gpl.git C:\piper1-gpl
+
+# Patch piper for onnxruntime 1.22.0 API + DLL-safe init (see patch_piper.ps1)
+# PIPER_PATCH_VER is a cache-buster: bump in deps.env to force this layer to rebuild.
+ARG PIPER_PATCH_VER=1
+COPY tools/patch_piper.ps1 C:/tools/
+RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_piper.ps1
+
+
+# Pre-download onnxruntime 1.22.0
+# Place it where libpiper's CMakeLists expects ONNXRUNTIME_DIR
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "New-Item -ItemType Directory -Force 'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
-     New-Item -ItemType Directory -Force 'C:\dist\piper-addon\Mods\Services\HoundTTS\voices' | Out-Null; \
-     Copy-Item -Recurse -Force 'C:\deps\piper\*'  'C:\dist\piper-addon\Mods\Services\HoundTTS\bin\piper'; \
-     Copy-Item -Recurse -Force 'C:\deps\voices\*' 'C:\dist\piper-addon\Mods\Services\HoundTTS\voices'"
+    "$url = 'https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip'; \
+     $zip = 'C:\ort.zip'; \
+     Invoke-WebRequest -Uri $url -OutFile $zip; \
+     Expand-Archive -Path $zip -DestinationPath 'C:\ort'; \
+     Remove-Item $zip"
+
+# Build libpiper: auto-clones espeak-ng (ExternalProject_Add); use pre-downloaded onnxruntime
+# Phase 1: configure + build espeak-ng only
+RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
+    cmake -S C:\piper1-gpl\libpiper -B C:\piper1-build \
+      -G "NMake Makefiles" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=C:\piper1-install \
+      -DONNXRUNTIME_DIR=C:/ort/onnxruntime-win-x64-1.22.0 \
+      -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
+      "-DCMAKE_CXX_FLAGS=/DESPEAK_API= /utf-8" && \
+    cmake --build C:\piper1-build --target espeak_ng_external
+
+# Phase 2: patch espeak-ng installed header — replace __declspec(dllimport)
+#           with empty ESPEAK_API so piper links statically against espeak-ng
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$h = 'C:\piper1-build\espeak_ng-install\include\espeak-ng\speak_lib.h'; \
+     $c = [System.IO.File]::ReadAllText($h); \
+     $c = $c.Replace('__declspec(dllimport)', ''); \
+     [System.IO.File]::WriteAllText($h, $c); \
+     Write-Host 'speak_lib.h patched OK'"
+
+# Phase 3: build piper (espeak-ng already built, header patched)
+RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
+    cmake --build C:\piper1-build --config Release && \
+    cmake --install C:\piper1-build
+
+# Assemble piper-engine dist (DLLs + espeak-ng-data + license — ~16 MB)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "New-Item -ItemType Directory -Force 'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
+     Copy-Item 'C:\piper1-install\piper.dll'                             'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item 'C:\piper1-install\lib\onnxruntime.dll'                  'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item -Recurse 'C:\piper1-install\espeak-ng-data'              'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item 'C:\piper1-gpl\COPYING'                                    'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper\COPYING'"
+
+# Assemble piper-voices dist (bundled voice models — ~120 MB)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "New-Item -ItemType Directory -Force 'C:\dist\piper-voices\Mods\Services\HoundTTS\voices' | Out-Null; \
+     Copy-Item -Recurse -Force 'C:\deps\voices\*'                       'C:\dist\piper-voices\Mods\Services\HoundTTS\voices'"
 
 # ============================================================
 # Stage 3: build — copy source, compile, assemble dist/base
@@ -154,8 +198,9 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS output
 
-COPY --from=build C:\\dist\\base         C:\\dist\\base
-COPY --from=piper C:\\dist\\piper-addon  C:\\dist\\piper-addon
+COPY --from=build C:\\dist\\base           C:\\dist\\base
+COPY --from=piper C:\\dist\\piper-engine   C:\\dist\\piper-engine
+COPY --from=piper C:\\dist\\piper-voices   C:\\dist\\piper-voices
 
 # Copy dist to C:\output on run
 CMD xcopy /E /I /Y C:\\dist C:\\output

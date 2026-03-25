@@ -28,10 +28,11 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 
 Download the latest release from [GitHub releases](https://github.com/uriba107/HoundTTS/releases) and extract it into your DCS Saved Games folder (e.g. `%USERPROFILE%\Saved Games\DCS\`).
 
-Each release includes two archives:
+Each release includes three archives:
 
-- **`HoundTTS-windows.zip`** — the full working package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started.**
-- **`HoundTTS-piper-addon-windows.zip`** — an optional add-on, as the name states. Contains only the [Piper TTS](https://github.com/piper-tts-go/piper) engine binaries and bundled voice models (~150 MB). Install this in addition to the base package if you want to use Piper TTS. On future updates you only need to re-download the base package — the piper add-on stays valid unless Piper itself is updated.
+- **`HoundTTS-windows.zip`** — the base package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started** (with cloud or SAPI providers).
+- **`HoundTTS-piper-engine-windows.zip`** — the Piper TTS engine (~16 MB). Contains `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3), `onnxruntime.dll`, and `espeak-ng-data/`. Install this in addition to the base package if you want to use Piper TTS. The DLL keeps voice models loaded between calls, eliminating per-call cold-start latency. Only needs re-downloading when piper or onnxruntime is updated.
+- **`HoundTTS-piper-voices-windows.zip`** — two bundled English voice models (~120 MB). Download once, keep across updates. You can also skip this and download your own voices from [HuggingFace](https://huggingface.co/rhasspy/piper-voices) instead.
 
 > **Config files:** copy each `.example` file to the same name without `.example` and edit it. These files are never overwritten by updates — your live settings are safe.
 
@@ -43,12 +44,12 @@ Saved Games\DCS\
 ├── Mods\Services\HoundTTS\
 │   ├── bin\
 │   │   ├── HoundTTS.dll
-│   │   └── piper\                    ← from piper-addon (Piper TTS only)
-│   │       ├── piper.exe
-│   │       ├── espeak-ng.dll
+│   │   └── piper\                    ← from piper-engine
+│   │       ├── piper.dll             ← in-process TTS engine (GPLv3)
 │   │       ├── onnxruntime.dll
-│   │       └── ...
-│   ├── voices\                       ← from piper-addon
+│   │       ├── espeak-ng-data\
+│   │       └── COPYING               ← GPLv3 license for piper.dll
+│   ├── voices\                       ← from piper-voices (or bring your own)
 │   │   ├── en_US-lessac-low.onnx
 │   │   ├── en_US-lessac-low.onnx.json
 │   │   ├── en_US-ryan-low.onnx
@@ -93,7 +94,7 @@ All providers are selected per-call via the `provider` field in `HoundTTS.Transm
 
 ### Piper (offline, bundled)
 
-Connects directly to SRS over TCP/UDP. Synthesizes speech via [piper-tts-go/piper](https://github.com/piper-tts-go/piper). **No internet or API key required.** `piper.exe` and two bundled voice models are included in `dist\piper-addon\`.
+**No internet or API key required.** Synthesizes speech in-process via `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3). Voice models stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-piper-engine-windows.zip` and two bundled voice models in `HoundTTS-piper-voices-windows.zip`.
 
 ```lua
 HoundTTS.Transmit("Bogey, bullseye 270 for 15",
@@ -332,8 +333,9 @@ Copy `HoundTTS-credentials.ini.example` → `HoundTTS-credentials.ini` in the sa
 
 ```ini
 [Piper]
-; Path to piper.exe — leave blank to use bundled bin\piper\piper.exe
-exe =
+; Path to the piper binary directory (containing piper.dll or piper.exe)
+; Leave blank to use bundled bin\piper\ folder (from the piper-engine package)
+path =
 ; Path to folder containing .onnx voice model files
 ; Leave blank to use bundled voices\ folder
 voice_path =
@@ -559,10 +561,10 @@ HoundTTS.Translate("Two contacts, BULLSEYE 270 for 40",
 
 **`provider_params`** (table):
 
-| Field    | Type   | Default    | Description                                                                                            |
-| -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------ |
-| provider | string | `"openai"` | `"openai"`, `"google"` (`"gcloud"`), `"libretranslate"` (`"libre"`), `"aws"` (`"polly"`), or `"azure"` |
-| language | string | `"en"`     | ISO 639-1 code e.g. `"de"`, `"fr"`, `"ru"`, `"he"` — full names like `"German"` also accepted          |
+| Field    | Type   | Default    | Description                                                                                                                                                                   |
+| -------- | ------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| provider | string | `"openai"` | `"openai"`, `"google"` (`"gcloud"`), `"libretranslate"` (`"libre"`), `"aws"` (`"polly"`), or `"azure"`                                                                        |
+| language | string | `"en"`     | ISO 639-1 two-letter code e.g. `"de"`, `"fr"`, `"ru"`, `"he"` — see [Wikipedia: List of ISO 639 language codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes) |
 
 The HTTP request runs on a DLL background thread. A `timer.scheduleFunction` polls for the result every 0.5 seconds and invokes the callback — DCS is never blocked.
 
@@ -649,7 +651,7 @@ src/
     │   ├── openai/
     │   │   └── openai_tts.*       # OpenAI-compatible TTS REST API (+ LocalAI)
     │   ├── piper/
-    │   │   └── piper_tts.*        # CreateProcess piper.exe, PCM→Opus streaming
+    │   │   └── piper_tts.*        # In-process piper.dll synthesis (deprecated piper.exe fallback)
     │   ├── aws/
     │   │   └── aws_tts.*          # AWS Polly REST API
     │   └── sapi/
@@ -674,6 +676,12 @@ src/
 The `"kitten"` / `"kittentts"` / `"kitten_tts"` provider names will be removed. In the current release they still work and log a deprecation warning in `Logs\HoundTTS.log`.
 
 **Action required:** migrate to `provider = "openai"` and point `[OpenAI] endpoint` at your Kitten TTS Server — see the [Kitten TTS section](#kitten-tts-self-hosted--deprecated) above for step-by-step instructions.
+
+**`piper.exe` subprocess fallback removed**
+
+Piper TTS now runs entirely in-process via `piper.dll` (shipped in the piper-engine package). The legacy `piper.exe` subprocess fallback is deprecated in the current release and will be removed in 0.3.x. If `piper.dll` fails to load, a deprecation warning is logged in `Logs\HoundTTS.log`.
+
+**Action required:** ensure you are using the piper-engine package (`HoundTTS-piper-engine-windows.zip`), which includes `piper.dll`, `onnxruntime.dll`, and `espeak-ng-data/`. Remove any standalone `piper.exe` from your installation — it is no longer needed or supported.
 
 ---
 
@@ -720,7 +728,8 @@ The pipeline produces the following `dist\` layout:
 ```
 dist\
 ├── base\          ← DLL + Lua scripts (always install this)
-└── piper-addon\   ← Piper engine + bundled voices (install for Piper TTS)
+├── piper-engine\  ← Piper TTS engine (~16 MB, install for Piper TTS)
+└── piper-voices\  ← Bundled voice models (~120 MB, or bring your own)
 ```
 
 ### Windows (native, no Docker)
@@ -730,6 +739,12 @@ build.bat
 ```
 
 Auto-detects MinGW or MSVC CLI, generates the import library from `lua.dll`, builds the DLL, and copies everything to `dist\`.
+
+## License
+
+HoundTTS itself is released under the **MIT License** — see [LICENSE](LICENSE).
+
+The **piper-engine** package (`HoundTTS-piper-engine-windows.zip`) contains `piper.dll`, built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl) and distributed under the **GNU General Public License v3.0 (GPLv3)**. The full license text is included as `bin\piper\COPYING`. Source code is available at the repository linked above.
 
 ## Acknowledgements
 

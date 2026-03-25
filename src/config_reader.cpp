@@ -77,7 +77,20 @@ void ConfigReader::ParseIni(const std::string& content) {
             val = val.substr(1, val.size() - 2);
 
         if (section == "Piper") {
-            if (key == "exe")        piperExe_       = val;
+            if (key == "path" || key == "exe" || key == "dll_path") {
+                // Normalize: strip trailing piper.exe or piper.dll to get directory
+                auto endsWithCI = [](const std::string& s, const std::string& suffix) {
+                    if (s.size() < suffix.size()) return false;
+                    std::string tail = s.substr(s.size() - suffix.size());
+                    for (auto& c : tail) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+                    return tail == suffix;
+                };
+                if (endsWithCI(val, "\\piper.exe") || endsWithCI(val, "/piper.exe") ||
+                    endsWithCI(val, "\\piper.dll") || endsWithCI(val, "/piper.dll")) {
+                    val = val.substr(0, val.find_last_of("\\/"));
+                }
+                piperPath_ = val;
+            }
             if (key == "voice_path") piperVoicePath_ = val;
         } else if (section == "Google") {
             if (key == "credentials_file") googleCredsFile_ = val;
@@ -118,10 +131,10 @@ void ConfigReader::ParseIni(const std::string& content) {
     if (libreTranslateEndpoint_.empty()) libreTranslateEndpoint_ = "http://localhost:5000";
 
     // Bundled piper defaults (relative to writedir)
-    if (piperExe_.empty()) {
-        piperExe_ = writedir_;
-        if (!piperExe_.empty() && piperExe_.back() != '\\') piperExe_ += '\\';
-        piperExe_ += "Mods\\Services\\HoundTTS\\bin\\piper\\piper.exe";
+    if (piperPath_.empty()) {
+        piperPath_ = writedir_;
+        if (!piperPath_.empty() && piperPath_.back() != '\\') piperPath_ += '\\';
+        piperPath_ += "Mods\\Services\\HoundTTS\\bin\\piper";
     }
     if (piperVoicePath_.empty()) {
         piperVoicePath_ = writedir_;
@@ -134,9 +147,9 @@ std::string ConfigReader::GetWritedir() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return writedir_;
 }
-std::string ConfigReader::GetPiperExe() const {
+std::string ConfigReader::GetPiperPath() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return piperExe_;
+    return piperPath_;
 }
 std::string ConfigReader::GetPiperVoicePath() const {
     std::lock_guard<std::mutex> lock(mutex_);
