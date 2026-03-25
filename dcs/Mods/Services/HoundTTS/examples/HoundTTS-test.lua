@@ -32,7 +32,6 @@ local TTS_PROVIDERS_TO_TEST = {
     "elevenlabs",
     "aws",
     "openai",
-    "kittentts",
 }
 
 local TRANSLATION_PROVIDERS_TO_TEST = {
@@ -253,28 +252,6 @@ local tests = {
       '<speak>Altitude <say-as interpret-as="cardinal">25000</say-as> feet.</speak>',
       "AWS-Polly-SSML-sayas",
       { provider = "aws", voice = "Matthew", culture = "en-US", gender = "male", speed = 1.0, engine = "standard" } },
-
-    -- Kitten TTS (local/self-hosted neural TTS — https://github.com/devnen/Kitten-TTS-Server)
-    -- Requires [KittenTTS] endpoint in HoundTTS-credentials.ini.
-    -- Available voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
-    { "KittenTTS warmup",
-      "Warmup.",
-      "Kitten-warmup",
-      { provider = "kittentts", voice = "Bella" } },
-    { "KittenTTS Bella",
-      "Kitten TTS. Bella voice. Neural text to speech.",
-      "Kitten-Bella",
-      { provider = "kittentts", voice = "Bella" } },
-
-    { "KittenTTS Hugo male",
-      "Kitten TTS. Hugo voice. Male neural voice.",
-      "Kitten-Hugo",
-      { provider = "kittentts", voice = "Hugo" } },
-
-    { "KittenTTS speed 1.3",
-      "Kitten TTS at one point three speed.",
-      "Kitten-fast",
-      { provider = "kittentts", voice = "Bella", speed = 1.3 } },
 
     -- OpenAI TTS (cloud) / OpenAI-compatible endpoints (LocalAI, etc.)
     -- Requires [OpenAI] api_key (and optionally endpoint + model) in HoundTTS-credentials.ini.
