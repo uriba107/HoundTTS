@@ -153,7 +153,6 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 FROM deps AS build
 ARG HOUNDTTS_VERSION=0.0.0
-ARG HOUNDTTS_VERSION_FULL=
 
 WORKDIR C:\\src
 COPY . C:\\src\\
@@ -171,8 +170,7 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake \
       -DVCPKG_TARGET_TRIPLET=x64-windows-static \
-      -DHOUNDTTS_VERSION_OVERRIDE=%HOUNDTTS_VERSION% \
-      -DHOUNDTTS_VERSION_FULL=%HOUNDTTS_VERSION_FULL%
+      -DHOUNDTTS_VERSION_OVERRIDE=%HOUNDTTS_VERSION%
 
 # Compile
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
