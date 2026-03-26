@@ -108,17 +108,13 @@ jobs:
         shell: powershell
         run: |
           if ("${{ github.ref }}" -match '^refs/tags/v(.+)$') {
-            $full = $Matches[1]
             # CMake project(VERSION) only accepts numeric x.y.z[.w] — strip pre-release suffix
-            $ver = ($full -split '-')[0]
+            $ver = ($Matches[1] -split '-')[0]
           } else {
-            $full = "0.0.0"
-            $ver  = "0.0.0"
+            $ver = "0.0.0"
           }
-          Write-Host "Full version : $full"
           Write-Host "CMake version: $ver"
           echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
-          echo "FULL_VERSION=$full" >> $env:GITHUB_OUTPUT
 
       # --------------------------------------------------------
       # 4b. Build the Docker image
@@ -131,8 +127,7 @@ jobs:
             "-t", "houndtts-builder-msvc",
             "--target", "output",
             "--cache-from", "${{ env.DEPS_IMAGE }}:latest",
-            "--build-arg", "HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }}",
-            "--build-arg", "HOUNDTTS_VERSION_FULL=${{ steps.version.outputs.FULL_VERSION }}")
+            "--build-arg", "HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }}")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
             $buildArgs += "--build-arg"
