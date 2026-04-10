@@ -23,19 +23,16 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
 
 ARG CMAKE_VERSION=4.3.0
-RUN choco install -y cmake --version %CMAKE_VERSION% --installargs "ADD_CMAKE_TO_PATH=System"
-
 ARG GIT_VERSION=2.53.0
-RUN choco install -y git --version %GIT_VERSION%
-
 ARG WGET_VERSION=1.21.4
-RUN choco install -y wget --version %WGET_VERSION%
-
 ARG UNZIP_VERSION=6.0
-RUN choco install -y unzip --version %UNZIP_VERSION%
-
 ARG STRAWBERRYPERL_VERSION=5.38.2.2
-RUN choco install -y strawberryperl --version %STRAWBERRYPERL_VERSION%
+
+RUN choco install -y cmake --version %CMAKE_VERSION% --installargs "ADD_CMAKE_TO_PATH=System" && \
+    choco install -y git --version %GIT_VERSION% && \
+    choco install -y wget --version %WGET_VERSION% && \
+    choco install -y unzip --version %UNZIP_VERSION% && \
+    choco install -y strawberryperl --version %STRAWBERRYPERL_VERSION%
 
 # Visual Studio 2022 Build Tools — MSVC v143 + Windows 10 SDK 19041 (sapi.h, sphelper.h, COM headers)
 # Split into two layers to avoid hcsshim ImportLayer failure on large single layers
@@ -52,12 +49,20 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      Remove-Item 'C:\vs_buildtools.exe'; \
      if ($p.ExitCode -ne 0) { throw \"vs_buildtools.exe exited with code $($p.ExitCode)\" }"
 
+# Ninja build system for parallel compilation
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$url = 'https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip'; \
+     $zip = 'C:\ninja.zip'; \
+     Invoke-WebRequest -Uri $url -OutFile $zip; \
+     Expand-Archive -Path $zip -DestinationPath 'C:\BuildTools\bin' -Force; \
+     Remove-Item $zip"
+
 # vcpkg — classic mode install (no vcpkg.json manifest; version pinned via VCPKG_TAG)
+# Install packages — versions determined by the pinned vcpkg tag's built-in baseline
 ARG VCPKG_TAG=2026.03.18
 RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
-    C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics
-# Install packages — versions determined by the pinned vcpkg tag's built-in baseline
-RUN C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static && \
+    C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics && \
+    C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
 ARG HTTPLIB_VERSION=v0.38.0
@@ -88,7 +93,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 FROM deps AS piper
 
-ARG PIPER1_GPL_TAG=v1.4.1
+ARG PIPER1_GPL_TAG=v1.4.2
 RUN git clone --branch %PIPER1_GPL_TAG% --depth 1 \
     https://github.com/OHF-Voice/piper1-gpl.git C:\piper1-gpl
 
@@ -112,13 +117,13 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # Phase 1: configure + build espeak-ng only
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
     cmake -S C:\piper1-gpl\libpiper -B C:\piper1-build \
-      -G "NMake Makefiles" \
+      -G "Ninja" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=C:\piper1-install \
       -DONNXRUNTIME_DIR=C:/ort/onnxruntime-win-x64-1.22.0 \
       -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
       "-DCMAKE_CXX_FLAGS=/DESPEAK_API= /utf-8" && \
-    cmake --build C:\piper1-build --target espeak_ng_external
+    cmake --build C:\piper1-build --parallel --target espeak_ng_external
 
 # Phase 2: patch espeak-ng installed header — replace __declspec(dllimport)
 #           with empty ESPEAK_API so piper links statically against espeak-ng
@@ -131,9 +136,9 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 
 # Phase 3: build piper (espeak-ng already built, header patched)
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
-    cmake --build C:\piper1-build --config Release && \
-    cmake --install C:\piper1-build
-
+    cmake --build C:\piper1-build --parallel --config Release && \
+    cmake --install C:\piper1-build && \
+    rmdir /S /Q C:\piper1-build
 # Assemble piper-engine dist (DLLs + espeak-ng-data + license — ~16 MB)
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force 'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
@@ -155,7 +160,11 @@ FROM deps AS build
 ARG HOUNDTTS_VERSION=0.0.0
 
 WORKDIR C:\\src
-COPY . C:\\src\\
+COPY CMakeLists.txt C:/src
+COPY make_lua_lib.ps1 C:/src
+COPY src/ C:/src/src
+COPY include/ C:/src/include
+COPY lib/ C:/src/lib
 
 # Overlay httplib header from deps stage
 RUN copy C:\\deps\\include\\httplib.h C:\\src\\include\\httplib.h
@@ -166,37 +175,33 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\src\make_lua_lib.ps1
 # CMake configure
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
     cmake -S C:\src -B C:\build \
-      -G "NMake Makefiles" \
+      -G "Ninja" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake \
       -DVCPKG_TARGET_TRIPLET=x64-windows-static \
       -DHOUNDTTS_VERSION_OVERRIDE=%HOUNDTTS_VERSION%
 
-# Compile
+# Compile (parallel build uses all available cores)
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
-    cmake --build C:\build --config Release
-
-# Assemble dist/base
-RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "New-Item -ItemType Directory -Force 'C:\dist\base\Mods\Services\HoundTTS\bin' | Out-Null; \
-     New-Item -ItemType Directory -Force 'C:\dist\base\Mods\Services\HoundTTS\Scripts' | Out-Null; \
-     New-Item -ItemType Directory -Force 'C:\dist\base\Mods\Services\HoundTTS\examples' | Out-Null; \
-     New-Item -ItemType Directory -Force 'C:\dist\base\Scripts\Hooks' | Out-Null; \
-     New-Item -ItemType Directory -Force 'C:\dist\base\Config' | Out-Null; \
-     Copy-Item 'C:\build\bin\HoundTTS.dll'                                      'C:\dist\base\Mods\Services\HoundTTS\bin'; \
-     Copy-Item 'C:\src\dcs\Mods\Services\HoundTTS\Scripts\HoundTTS.lua'         'C:\dist\base\Mods\Services\HoundTTS\Scripts'; \
-     Copy-Item 'C:\src\dcs\Mods\Services\HoundTTS\Scripts\HoundTTS-mission.lua' 'C:\dist\base\Mods\Services\HoundTTS\Scripts'; \
-     Copy-Item 'C:\src\dcs\Mods\Services\HoundTTS\examples\*'                   'C:\dist\base\Mods\Services\HoundTTS\examples'; \
-     Copy-Item 'C:\src\dcs\Scripts\Hooks\HoundTTS-hook.lua'                     'C:\dist\base\Scripts\Hooks'; \
-     Copy-Item 'C:\src\dcs\Config\HoundTTS-config.lua.example'                  'C:\dist\base\Config\HoundTTS.lua.example'; \
-     Copy-Item 'C:\src\dcs\Config\HoundTTS-credentials.ini.example'             'C:\dist\base\Config\HoundTTS-credentials.ini.example'"
+    cmake --build C:\build --parallel
 
 # ============================================================
-# Stage 4: output — merge build + piper into final image
+# Stage 4: output — merge build + piper + dcs into final image
+#           Uses nanoserver (minimal) since we only copy files
 # ============================================================
-FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS output
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022 AS output
 
-COPY --from=build C:\\dist\\base           C:\\dist\\base
+# Compiled DLL from build stage
+COPY --from=build C:\\build\\bin\\HoundTTS.dll  C:\\dist\\base\\Mods\\Services\\HoundTTS\\bin\\HoundTTS.dll
+
+# Lua scripts + config from build context
+COPY dcs/Mods/Services/HoundTTS/Scripts/             C:\\dist\\base\\Mods\\Services\\HoundTTS\\Scripts\\
+COPY dcs/Mods/Services/HoundTTS/examples/            C:\\dist\\base\\Mods\\Services\\HoundTTS\\examples\\
+COPY dcs/Scripts/Hooks/HoundTTS-hook.lua              C:\\dist\\base\\Scripts\\Hooks\\HoundTTS-hook.lua
+COPY dcs/Config/HoundTTS-config.lua.example           C:\\dist\\base\\Config\\HoundTTS.lua.example
+COPY dcs/Config/HoundTTS-credentials.ini.example      C:\\dist\\base\\Config\\HoundTTS-credentials.ini.example
+
+# Piper engine + voices from piper stage
 COPY --from=piper C:\\dist\\piper-engine   C:\\dist\\piper-engine
 COPY --from=piper C:\\dist\\piper-voices   C:\\dist\\piper-voices
 

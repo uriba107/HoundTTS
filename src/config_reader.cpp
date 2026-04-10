@@ -26,20 +26,59 @@ void ConfigReader::Load(const std::string& writedir) {
 
     writedir_ = writedir;
 
+    // Reset all config members so stale values from a previous Load() don't carry over
+    piperPath_.clear();
+    piperVoicePath_.clear();
+    googleCredsFile_.clear();
+    azureKey_.clear();
+    azureRegion_.clear();
+    elevenLabsKey_.clear();
+    elevenLabsModelId_.clear();
+    kittenEndpoint_.clear();
+    openaiKey_.clear();
+    openaiEndpoint_.clear();
+    openaiModel_.clear();
+    openaiChatModel_.clear();
+    libreTranslateEndpoint_.clear();
+    libreTranslateApiKey_.clear();
+    awsAccessKey_.clear();
+    awsSecretKey_.clear();
+    awsRegion_.clear();
+    awsPollyEngine_.clear();
+    discordToken_.clear();
+    logLevel_.clear();
+
     std::string path = writedir;
     if (!path.empty() && path.back() != '\\' && path.back() != '/')
         path += '\\';
     path += "Config\\HoundTTS-credentials.ini";
 
     std::ifstream f(Utils::Utf8ToWide(path).c_str());
-    if (!f.is_open()) {
-        loaded_ = true;
-        return;
+    if (f.is_open()) {
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        ParseIni(ss.str());
     }
 
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    ParseIni(ss.str());
+    // Apply defaults (always, even if config file doesn't exist)
+    if (elevenLabsModelId_.empty()) elevenLabsModelId_ = "eleven_turbo_v2";
+    if (awsPollyEngine_.empty())     awsPollyEngine_    = "neural";
+    if (openaiEndpoint_.empty())     openaiEndpoint_    = "https://api.openai.com";
+    if (openaiModel_.empty())        openaiModel_       = "tts-1";
+    if (openaiChatModel_.empty())    openaiChatModel_   = "gpt-4o-mini";
+    if (libreTranslateEndpoint_.empty()) libreTranslateEndpoint_ = "http://localhost:5000";
+
+    if (piperPath_.empty()) {
+        piperPath_ = writedir_;
+        if (!piperPath_.empty() && piperPath_.back() != '\\' && piperPath_.back() != '/') piperPath_ += '\\';
+        piperPath_ += "Mods\\Services\\HoundTTS\\bin\\piper";
+    }
+    if (piperVoicePath_.empty()) {
+        piperVoicePath_ = writedir_;
+        if (!piperVoicePath_.empty() && piperVoicePath_.back() != '\\' && piperVoicePath_.back() != '/') piperVoicePath_ += '\\';
+        piperVoicePath_ += "Mods\\Services\\HoundTTS\\voices\\";
+    }
+
     loaded_ = true;
 }
 
@@ -121,26 +160,7 @@ void ConfigReader::ParseIni(const std::string& content) {
             if (key == "log_level") logLevel_ = val;
         }
     }
-
-    // Apply defaults for blank values
-    if (elevenLabsModelId_.empty()) elevenLabsModelId_ = "eleven_turbo_v2";
-    if (awsPollyEngine_.empty())     awsPollyEngine_    = "neural";
-    if (openaiEndpoint_.empty())     openaiEndpoint_    = "https://api.openai.com";
-    if (openaiModel_.empty())        openaiModel_       = "tts-1";
-    if (openaiChatModel_.empty())    openaiChatModel_   = "gpt-4o-mini";
-    if (libreTranslateEndpoint_.empty()) libreTranslateEndpoint_ = "http://localhost:5000";
-
-    // Bundled piper defaults (relative to writedir)
-    if (piperPath_.empty()) {
-        piperPath_ = writedir_;
-        if (!piperPath_.empty() && piperPath_.back() != '\\') piperPath_ += '\\';
-        piperPath_ += "Mods\\Services\\HoundTTS\\bin\\piper";
-    }
-    if (piperVoicePath_.empty()) {
-        piperVoicePath_ = writedir_;
-        if (!piperVoicePath_.empty() && piperVoicePath_.back() != '\\') piperVoicePath_ += '\\';
-        piperVoicePath_ += "Mods\\Services\\HoundTTS\\voices\\";
-    }
+    // Defaults are applied in Load() after ParseIni() returns
 }
 
 std::string ConfigReader::GetWritedir() const {

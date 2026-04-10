@@ -65,6 +65,9 @@ add_library(HoundTTS SHARED
     src/config_reader.cpp
     src/process_launcher.cpp
     src/backends/codecs/opus_encoder.cpp
+    # Generators
+    src/providers/generators/tone.cpp
+    src/providers/generators/noise.cpp
     # Backends
     src/backends/srs/srs_client.cpp
     src/backends/srs/srs_backend.cpp

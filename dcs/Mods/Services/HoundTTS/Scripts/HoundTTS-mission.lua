@@ -93,6 +93,93 @@ function HoundTTS.round(x, n)
     return math.floor(x * p + 0.5) / p
 end
 
+-- Internal: returns true if obj is a live DCS Unit instance.
+-- TODO: use in Transmit/TransmitNoise to auto-extract LatLngAlt from a Unit
+--       passed in the 'point' field, replacing the manual getPoint() call.
+local function isDcsUnit(obj)
+    if type(obj) ~= "table" then return false end
+    return getmetatable(obj) == Unit
+end
+
+--- check if object is DCS static object
+-- @param obj DCS Object canidate
+-- @return[type=Bool] True if object is static object
+local function isStaticObject(obj)
+    if type(obj) ~= "table" then return false end
+    return getmetatable(obj) == StaticObject
+end
+
+local function isPoint(point)
+    if type(point) ~= "table" then return false end
+    return (type(point.x) == "number") and (type(point.z) == "number")
+end
+
+local function getTransmitterPos(dcsObject)
+    if dcsObject == nil then return nil end
+    if dcsObject ~= nil and (dcsObject:isExist() == false or dcsObject:getLife() < 1) then
+        return nil
+    end
+    local pos = dcsObject:getPoint()
+    local transmitterObjectCat, transmitterSubCat = dcsObject:getCategory()
+    if transmitterObjectCat == Object.Category.STATIC or (transmitterObjectCat == Object.Category.UNIT and transmitterSubCat == Unit.Category.GROUND_UNIT) then
+        local verticalOffset = (dcsObject:getDesc()["box"]["max"]["y"] + 5) or 20
+        pos.y = pos.y + verticalOffset
+    end
+    return pos
+end
+
+local function getCoords(point)
+    local lat, lon, alt = 91.0, 181.0, -500.0
+    if isPoint(point) then
+        lat, lon, alt = coord.LOtoLL(point)
+        lat = HoundTTS.round(lat, 4)
+        lon = HoundTTS.round(lon, 4)
+        alt = math.ceil(alt)
+    end
+    return lat, lon, alt
+end
+
+local tracked_sessions = {}
+local function addTrackingSession(sessionId,dcsObject)
+    if sessionId and not tracked_sessions[sessionId] then
+        tracked_sessions[sessionId] = dcsObject
+    end
+end
+local function removeTrackingSession(sessionId,killSession)
+    if killSession == true then
+        HoundTTS.KillSession(sessionId)
+    end
+    tracked_sessions[sessionId] = nil
+end
+
+local function updateTrackedSessions(_,time)
+    local toRemove = {}
+    for sessionId, dcsObject in pairs(tracked_sessions) do
+        if isDcsUnit(dcsObject) or isStaticObject(dcsObject) then
+            if dcsObject:isExist() and dcsObject:getLife() >= 1 then
+                local alive = HoundTTS.UpdateSession(sessionId,{point = getTransmitterPos(dcsObject)})
+                if not alive then
+                    table.insert(toRemove, {sessionId, true})
+                end
+            else
+                table.insert(toRemove, {sessionId, true})
+            end
+        else
+            table.insert(toRemove, sessionId)
+        end
+    end
+    for _, v in ipairs(toRemove) do
+        if type(v) == "table" then
+            removeTrackingSession(v[1], v[2])
+        else
+            removeTrackingSession(v)
+        end
+    end
+    return time + 0.5
+end
+
+timer.scheduleFunction(updateTrackedSessions, nil, timer.getTime() + 0.5)
+
 function HoundTTS.getSpeechTime(length, speed, providerOrGoogleTTS)
     if type(length) == "string" then length = #length end
     local provider
@@ -140,6 +227,8 @@ end
 --   .speed        number
 --   .engine       string  Polly only: "standard" | "neural" | "long-form" (overrides INI default)
 --   .volume       number  0.0–1.0
+--
+-- Returns: speechTime (number), sessionId (string)
 -- -------------------------------------------------------------------------
 function HoundTTS.Transmit(message, transmission_params, provider_params, translation_params)
     local tp = transmission_params or {}
@@ -156,13 +245,10 @@ function HoundTTS.Transmit(message, transmission_params, provider_params, transl
     local host        = tp.host      or HoundTTS.SRS_HOST
     local port        = tp.port      or HoundTTS.SRS_PORT
 
-    local lat, lon, alt = 91.0, 181.0, -500.0
-    if tp.point and type(tp.point) == "table" and tp.point.x then
-        lat, lon, alt = coord.LOtoLL(tp.point)
-        lat = HoundTTS.round(lat, 4)
-        lon = HoundTTS.round(lon, 4)
-        alt = math.ceil(alt)
+    if not isPoint(tp.point) and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
+        tp.point = getTransmitterPos(tp.dcsObject)
     end
+    local lat, lon, alt = getCoords(tp.point)
 
     local provider = ep.provider or HoundTTS.DEFAULT_PROVIDER
     local voice    = ep.voice    or HoundTTS.DEFAULT_VOICE   or ""
@@ -171,10 +257,10 @@ function HoundTTS.Transmit(message, transmission_params, provider_params, transl
     local gender   = ep.gender   or HoundTTS.DEFAULT_GENDER  or "female"
     local speed    = ep.speed
     local engine   = ep.engine or ""
-    local volume      = ep.volume    or tp.volume    or 1.0
+    local volume   = tp.volume or ep.volume or 1.0  -- prefer transmission_params
 
 
-    local result = _dll.textToSpeech(
+    local result, sessionId = _dll.textToSpeech(
         message,
         {
             transmitter = transmitter,
@@ -207,7 +293,10 @@ function HoundTTS.Transmit(message, transmission_params, provider_params, transl
         }
     )
 
-    return result or _dll_getSpeechTime(message, speed, provider)
+    if sessionId and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
+        addTrackingSession(sessionId,tp.dcsObject)
+    end
+    return result or _dll_getSpeechTime(message, speed, provider), sessionId
 end
 
 -- -------------------------------------------------------------------------
@@ -225,13 +314,7 @@ function HoundTTS.TextToSpeech(message, freqs, modulations, volume, name,
     name      = name      or "HoundTTS"
     coalition = coalition or 0
 
-    local lat, lon, alt = 91.0, 181.0, -500.0
-    if point and type(point) == "table" and point.x then
-        lat, lon, alt = coord.LOtoLL(point)
-        lat = HoundTTS.round(lat, 4)
-        lon = HoundTTS.round(lon, 4)
-        alt = math.ceil(alt)
-    end
+    local lat, lon, alt = getCoords(point)
 
     message = message:gsub('"', '\\"')
     local provider = googleTTS and "google" or "sapi"
@@ -332,6 +415,233 @@ function HoundTTS.Translate(message, provider_params, callback)
 end
 
 -- -------------------------------------------------------------------------
+-- HoundTTS.TransmitNoise(transmission_params, provider_params)
+--
+-- Starts a continuous noise jammer transmission.
+-- Returns a sessionId string that can be passed to UpdateSession / KillSession.
+--
+-- transmission_params (table) — same shape as Transmit:
+--   .transmitter  "srs" (default)
+--   .freqs        string  e.g. "251.0" or "305.0,127.0"  (also .freq)
+--   .modulations  string  e.g. "AM" or "AM,FM"           (also .modulation)
+--   .coalition    number  0=spectator, 1=red, 2=blue
+--   .name         string  client name shown in SRS
+--   .point        DCS Vec3 (optional) — initial transmitter position
+--   .encrypt      bool
+--   .encKey       number  0–255
+--   .host         string  SRS host override
+--   .port         number  SRS port override
+--
+-- provider_params (table):
+--   .noiseType    "white" (default) | "chirp" | "harsh" | "jam"
+--   .volume       number  0.0–1.0  (default 1.0)
+--   .seed         number  RNG seed (optional, auto-generated if absent)
+-- -------------------------------------------------------------------------
+function HoundTTS.TransmitNoise(transmission_params, provider_params)
+    local tp = transmission_params or {}
+    local ep = provider_params     or {}
+
+    local transmitter = tp.transmitter or HoundTTS.DEFAULT_TRANSMITTER
+    local freqs       = tostring(tp.freqs       or tp.freq       or "251.0")
+    local modulations = tostring(tp.modulations or tp.modulation or "AM")
+    local coalition   = tp.coalition or 0
+    local name        = tp.name      or "HoundTTS-Jammer"
+    local encrypt     = tp.encrypt   or HoundTTS.SRS_ENCRYPT or false
+    local encKey      = tp.encKey    or HoundTTS.SRS_ENC_KEY or 0
+    local host        = tp.host      or HoundTTS.SRS_HOST
+    local port        = tp.port      or HoundTTS.SRS_PORT
+
+    if not isPoint(tp.point) and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
+        tp.point = getTransmitterPos(tp.dcsObject)
+    end
+
+    local lat, lon, alt = getCoords(tp.point)
+
+    local noiseType = ep.noiseType or "white"
+    local volume    = tp.volume or ep.volume or 1.0  -- prefer transmission_params
+    local duration  = ep.duration  or 0         -- <=0 means continuous
+    local noiseParams = { noiseType = noiseType, volume = volume, duration = duration }
+    if ep.seed then noiseParams.seed = ep.seed end
+
+    local sessionId = _dll.startNoise(
+        {
+            transmitter = transmitter,
+            host        = host,
+            port        = port,
+            freqs       = freqs,
+            modulations = modulations,
+            coalition   = coalition,
+            name        = name,
+            encrypt     = encrypt,
+            encKey      = encKey,
+            lat         = lat,
+            lon         = lon,
+            alt         = alt,
+        },
+        noiseParams
+    )
+    if sessionId and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
+        addTrackingSession(sessionId,tp.dcsObject)
+    end
+    return sessionId
+end
+
+-- -------------------------------------------------------------------------
+-- HoundTTS.UpdateSession(sessionId, update_params)
+--
+-- Updates the position of a live transmission (TTS or noise).
+-- Position updates are SRS-specific and trigger an immediate TCP re-sync.
+-- Can be called as frequently as needed (e.g. every 0.5s from a scheduler).
+--
+-- sessionId    : string — returned by Transmit / TransmitNoise / TransmitTone
+-- update_params (table):
+--   .point      DCS Vec3 (optional) — new transmitter position
+--   .lat        number  (optional) — explicit lat/lon/alt (overrides .point)
+--   .lon        number
+--   .alt        number
+--
+-- Returns true if the session is still alive (transmission ongoing).
+-- Returns false if the session was not found OR the transmission has ended
+-- naturally (e.g. noise duration elapsed, TTS finished). Use this to break
+-- out of a position-update scheduler loop without sending a kill command:
+--
+--   local function track(_, t)
+--       if not HoundTTS.UpdateSession(id, { point = unit:getPoint() }) then
+--           return nil  -- stop polling
+--       end
+--       return t + 0.5
+--   end
+--   timer.scheduleFunction(track, nil, timer.getTime() + 0.5)
+-- -------------------------------------------------------------------------
+function HoundTTS.UpdateSession(sessionId, update_params)
+    if not sessionId then return false end
+    local up = update_params or {}
+
+    local lat, lon, alt
+
+    -- Start from point if provided
+    if isPoint(up.point) then
+        lat, lon, alt = coord.LOtoLL(up.point)
+        lat = HoundTTS.round(lat, 4)
+        lon = HoundTTS.round(lon, 4)
+        alt = math.ceil(alt)
+    end
+
+    -- Explicit coordinates override point-derived values (partial overrides OK)
+    if up.lat then lat = up.lat end
+    if up.lon then lon = up.lon end
+    if up.alt then alt = up.alt end
+
+    local updateTbl = {}
+    if lat ~= nil then updateTbl.lat = lat end
+    if lon ~= nil then updateTbl.lon = lon end
+    if alt ~= nil then updateTbl.alt = alt end
+
+    -- _dll.updateSession returns:
+    --   true  — session found and still alive
+    --   false — session found but transmission has ended
+    --   nil   — session not found
+    -- The documented contract above promises false for "not found", so map nil→false.
+    local ok = _dll.updateSession(sessionId, updateTbl)
+    return ok or false
+end
+
+-- -------------------------------------------------------------------------
+-- HoundTTS.KillSession(sessionId)
+--
+-- Stops a live transmission (TTS or noise) identified by sessionId.
+-- For noise jammers this terminates the noise loop immediately.
+-- For TTS transmissions it signals an early stop.
+--
+-- Returns true if the session was found and killed, false otherwise.
+-- -------------------------------------------------------------------------
+function HoundTTS.KillSession(sessionId)
+    if not sessionId then return false end
+    local result = _dll.updateSession(sessionId, { alive = false })
+    -- _dll.updateSession returns the alive state (false after kill) or nil
+    -- if session not found.  Any non-nil return means the session existed.
+    return result ~= nil
+end
+
+-- -------------------------------------------------------------------------
+-- HoundTTS.KillAllSessions()
+--
+-- Stops every live transmission.  Returns the number of sessions killed.
+-- -------------------------------------------------------------------------
+function HoundTTS.KillAllSessions()
+    tracked_sessions = {}
+    return _dll.killAllSessions()
+end
+
+-- -------------------------------------------------------------------------
+-- HoundTTS.TransmitTone(transmission_params, provider_params)
+--
+-- Transmits a fixed-frequency sine-wave tone over SRS.
+-- Returns a sessionId (tone is finite but can be killed early with KillSession).
+--
+-- transmission_params (table) — same shape as Transmit / TransmitNoise:
+--   .transmitter  "srs" (default)
+--   .freqs        string  e.g. "251.0"   (also .freq)
+--   .modulations  string  e.g. "AM"      (also .modulation)
+--   .coalition    number  0=spectator, 1=red, 2=blue
+--   .name         string  client name shown in SRS
+--   .point        DCS Vec3 (optional) — transmitter position
+--   .encrypt      bool
+--   .encKey       number  0–255
+--   .host / .port override SRS address
+--
+-- provider_params (table):
+--   .duration  number  seconds (default 2.0)
+--   .freqHz    number  Hz (default 440.0)
+--   .volume    number  0.0–1.0 (default 1.0)
+-- -------------------------------------------------------------------------
+function HoundTTS.TransmitTone(transmission_params, provider_params)
+    local tp = transmission_params or {}
+    local ep = provider_params     or {}
+
+    local transmitter = tp.transmitter or HoundTTS.DEFAULT_TRANSMITTER
+    local freqs       = tostring(tp.freqs       or tp.freq       or "251.0")
+    local modulations = tostring(tp.modulations or tp.modulation or "AM")
+    local coalition   = tp.coalition or 0
+    local name        = tp.name      or "HoundTTS-Tone"
+    local encrypt     = tp.encrypt   or HoundTTS.SRS_ENCRYPT or false
+    local encKey      = tp.encKey    or HoundTTS.SRS_ENC_KEY or 0
+    local host        = tp.host      or HoundTTS.SRS_HOST
+    local port        = tp.port      or HoundTTS.SRS_PORT
+
+    if not isPoint(tp.point) and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
+        tp.point = getTransmitterPos(tp.dcsObject)
+    end
+    local lat, lon, alt = getCoords(tp.point)
+
+    local duration = ep.duration or tp.duration or 2.0
+    local freqHz   = math.max(20.0, math.min(20000.0, ep.freqHz or 440.0))
+    local volume   = tp.volume or ep.volume or 1.0  -- prefer transmission_params
+
+    local sessionId = _dll.startTone(
+        {
+            transmitter = transmitter,
+            host        = host,
+            port        = port,
+            freqs       = freqs,
+            modulations = modulations,
+            coalition   = coalition,
+            name        = name,
+            encrypt     = encrypt,
+            encKey      = encKey,
+            lat         = lat,
+            lon         = lon,
+            alt         = alt,
+        },
+        { duration = duration, freqHz = freqHz, volume = volume }
+    )
+    if sessionId and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
+        addTrackingSession(sessionId,tp.dcsObject)
+    end
+    return sessionId
+end
+
+-- -------------------------------------------------------------------------
 -- HoundTTS.TestTone([freqs], [modulations], [coalition], [duration], [volume])
 -- Sends a 440Hz sine wave over SRS — good for connection testing.
 -- duration = duration in seconds (default 2).
@@ -343,32 +653,26 @@ function HoundTTS.TestTone(freqs, modulations, coalition, duration, volume)
     coalition   = coalition   or 0
     duration    = duration    or 2.0
     volume      = volume      or 1.0
-    _dll.textToSpeech(
-        "__test_tone__",
+
+    HoundTTS.TransmitTone(
         {
-            transmitter = "srs",
-            host        = HoundTTS.SRS_HOST,
-            port        = HoundTTS.SRS_PORT,
             freqs       = tostring(freqs),
             modulations = tostring(modulations),
             coalition   = coalition,
             name        = "HoundTTS-Test",
-            encrypt     = false,
-            encKey      = 0,
-            lat         = 91.0,
-            lon         = 181.0,
-            alt         = -500.0,
         },
-        {
-            provider    = "",
-            voice       = "",
-            speaker     = "",
-            culture     = "",
-            gender      = "",
-            speed       = duration,
-            volume      = volume
-        }
+        { duration = duration, volume = volume }
     )
 end
+
+-- Kill all active sessions on mission end to prevent jammers surviving a restart
+local missionEndHandler = {}
+function missionEndHandler:onEvent(event)
+    if event.id == world.event.S_EVENT_MISSION_END then
+        env.info("[HoundTTS] mission end — killing all sessions")
+        HoundTTS.KillAllSessions()
+    end
+end
+world.addEventHandler(missionEndHandler)
 
 env.info("[HoundTTS] ready")

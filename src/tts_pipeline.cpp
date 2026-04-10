@@ -1,4 +1,7 @@
 #include "tts_pipeline.h"
+#include "session.h"
+#include "providers/generators/tone.h"
+#include "providers/generators/noise.h"
 #include "providers/tts/sapi/sapi_tts.h"
 #include "providers/tts/piper/piper_tts.h"
 #include "providers/tts/azure/azure_tts.h"
@@ -192,20 +195,7 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         }).detach();
 
     } else if (message == "__test_tone__") {
-        // Test tone: 440Hz sine at 16kHz, duration = speed (seconds)
-        const int   sampleRate = 16000;
-        const int   durationS  = (speed > 0.0) ? static_cast<int>(std::ceil(speed)) : 2;
-        const float freq440    = 440.0f;
-        const int   numSamples = sampleRate * durationS;
-        std::vector<int16_t> pcm(numSamples);
-        float vol = static_cast<float>(std::max(0.0, std::min(1.0, volume)));
-        for (int i = 0; i < numSamples; ++i) {
-            float t   = static_cast<float>(i) / sampleRate;
-            float val = std::sin(2.0f * 3.14159265f * freq440 * t);
-            pcm[i] = static_cast<int16_t>(val * 16000.0f * vol);
-        }
-        queue->Push(std::move(pcm));
-        queue->MarkDone();
+        GenerateTone(queue, nullptr, 2.0, 440.0f, static_cast<float>(volume));
 
     } else {
         // Unknown provider or Sapi — synthesize-all via SAPI
@@ -215,6 +205,25 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             queue->Push(std::move(pcm));
         queue->MarkDone();
     }
+}
+
+void TTSPipeline::ProduceNoise(std::shared_ptr<PCMQueue> queue,
+                                std::shared_ptr<Session> session,
+                                const std::string& noiseType,
+                                uint32_t seed,
+                                float volume,
+                                double duration) {
+    GenerateNoise(queue, session, noiseType, seed, volume, duration);
+    LogI("ProduceNoise done");
+}
+
+void TTSPipeline::ProduceTone(std::shared_ptr<PCMQueue> queue,
+                               std::shared_ptr<Session> session,
+                               double duration,
+                               float  freqHz,
+                               float  volume) {
+    GenerateTone(queue, session, duration, freqHz, volume);
+    LogI("ProduceTone done");
 }
 
 } // namespace HoundTTS

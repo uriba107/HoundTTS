@@ -517,16 +517,16 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 | `"srs"`       | `"openai"`     | Direct SRS + OpenAI / LocalAI / Kitten TTS Server HTTP REST                           |
 | `"srs"`       | `"kitten"`     | ⚠️ Deprecated — reroutes through OpenAI-compat endpoint; will be removed next release |
 
-Returns: estimated speech time in seconds.
+Returns: `speechTime` (number — estimated speech duration in seconds), `sessionId` (string — for use with `UpdateSession` / `KillSession`).
 
 ---
 
-#### `HoundTTS.TestTone([freqs], [modulations], [coalition])`
+#### `HoundTTS.TestTone([freqs], [modulations], [coalition], [duration], [volume])`
 
-Sends a 2-second 440 Hz sine wave tone directly over SRS, bypassing the TTS engine entirely. Use this to verify the SRS connection is working before debugging TTS issues.
+Sends a sine wave tone directly over SRS, bypassing the TTS engine entirely. Use this to verify the SRS connection is working before debugging TTS issues.
 
 ```lua
-HoundTTS.TestTone("251.0", "AM", 2)
+HoundTTS.TestTone("251.0", "AM", 2)  -- 2-second 440 Hz tone on 251.0 MHz AM, blue coalition
 ```
 
 | Argument    | Type   | Default   | Description                |
@@ -534,6 +534,166 @@ HoundTTS.TestTone("251.0", "AM", 2)
 | freqs       | string | `"251.0"` | Frequency in MHz           |
 | modulations | string | `"AM"`    | `AM` or `FM`               |
 | coalition   | number | `0`       | 0=spectator, 1=red, 2=blue |
+| duration    | number | `2.0`     | Duration in seconds        |
+| volume      | number | `1.0`     | Volume level (0.0–1.0)     |
+
+---
+
+#### `HoundTTS.TransmitTone(transmission_params, provider_params)`
+
+Transmits a configurable sine-wave tone over SRS. Returns a `sessionId` that can be used with `UpdateSession` (for position tracking) or `KillSession` (to stop early).
+
+```lua
+-- 5-second 1000 Hz tone on 251.0 MHz AM
+local sessionId = HoundTTS.TransmitTone(
+    { freqs = "251.0", modulations = "AM", coalition = 2, name = "ATIS" },
+    { duration = 5.0, freqHz = 1000.0, volume = 0.8 }
+)
+
+-- Track a moving unit
+local unit = Unit.getByName("MyUnit")
+local function trackTone(_, t)
+    if not HoundTTS.UpdateSession(sessionId, { point = unit:getPoint() }) then
+        return nil  -- tone finished or session killed
+    end
+    return t + 0.5
+end
+timer.scheduleFunction(trackTone, nil, timer.getTime() + 0.5)
+```
+
+**`transmission_params`** (table) — same as `Transmit`:
+
+| Field       | Type     | Default             | Description                            |
+| ----------- | -------- | ------------------- | -------------------------------------- |
+| transmitter | string   | `"srs"`             | Transmitter type                       |
+| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated      |
+| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated          |
+| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue             |
+| name        | string   | `"HoundTTS-Tone"`   | Client name shown in SRS               |
+| point       | Vec3/nil | `nil`               | DCS position for geo-location          |
+| encrypt     | boolean  | `false`             | Enable SRS encryption                  |
+| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS) |
+| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                          |
+| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                        |
+
+**`provider_params`** (table):
+
+| Field    | Type   | Default | Description                                           |
+| -------- | ------ | ------- | ----------------------------------------------------- |
+| duration | number | `2.0`   | Duration in seconds (hard-capped at 7200 s / 2 hours) |
+| freqHz   | number | `440.0` | Tone frequency in Hz (20–20000)                       |
+| volume   | number | `1.0`   | Output level (0.0 = silence, 1.0 = full)              |
+
+Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
+
+---
+
+#### `HoundTTS.TransmitNoise(transmission_params, provider_params)`
+
+Starts a noise transmission (e.g., jamming). Runs for the specified number of seconds when `duration > 0`, or up to 2 hours (7200 s) when `duration` is 0 (the default). All noise sessions are hard-capped at 7200 s regardless of the requested duration. Returns a `sessionId` for position updates or early termination via `KillSession`.
+
+```lua
+-- Start a noise jammer on 251.0 MHz FM
+local jammerId = HoundTTS.TransmitNoise(
+    { freqs = "251.0", modulations = "FM", coalition = 2, name = "Jammer" },
+    { noiseType = "jam", volume = 0.7 }
+)
+
+-- Track a moving jammer platform
+local jammerUnit = Unit.getByName("JammerPlatform")
+local function trackJammer(_, t)
+    if not HoundTTS.UpdateSession(jammerId, { point = jammerUnit:getPoint() }) then
+        return nil  -- session ended
+    end
+    return t + 0.5
+end
+timer.scheduleFunction(trackJammer, nil, timer.getTime() + 0.5)
+
+-- Later: stop the jammer
+HoundTTS.KillSession(jammerId)
+```
+
+**`transmission_params`** (table) — same as `Transmit`:
+
+| Field       | Type     | Default             | Description                            |
+| ----------- | -------- | ------------------- | -------------------------------------- |
+| transmitter | string   | `"srs"`             | Transmitter type                       |
+| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated      |
+| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated          |
+| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue             |
+| name        | string   | `"HoundTTS-Jammer"` | Client name shown in SRS               |
+| point       | Vec3/nil | `nil`               | DCS position for geo-location          |
+| encrypt     | boolean  | `false`             | Enable SRS encryption                  |
+| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS) |
+| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                          |
+| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                        |
+
+**`provider_params`** (table):
+
+| Field     | Type   | Default   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------- | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| noiseType | string | `"white"` | `"white"` / `"pink"` / `"chirp"` / `"harsh"` / `"jam"` — all tuned for channel jamming. `"white"`/`"pink"`: overdriven 1/f pink noise (dense, full-spectrum). `"chirp"`: noise floor + 8 fast-swept sines with overdrive. `"harsh"`: noise floor + 8 rapid square-wave oscillators with heavy overdrive (most aggressive). `"jam"`: anti-denoise + anti-AGC mode — pink noise + ultra-short oscillators (5–35 ms) + duty-cycle AM pulses + random bursts; designed to resist both the SRS client's Speex noise reduction and its incoming-audio AGC normalization. |
+| volume    | number | `1.0`     | Output level (0.0 = silence, 1.0 = full) |
+| duration  | number | `0`       | Duration in seconds. 0 = runs until killed (hard-capped at 7200 s / 2 hours) |
+| spreadKhz | number | `250`     | Total adjacent-channel spectral spread in kHz. Controls the maximum ±bandwidth around each center frequency for adjacent-channel tones and leakage. Larger values create wider spectral leakage; smaller values keep noise more tightly clustered. Must be positive to take effect and interacts with `stepKhz`, `noiseType`, `volume`, and `duration`. |
+| stepKhz   | number | `25`      | Spacing between adjacent-channel tones in kHz. Defaults to 25 kHz standard AM spacing. Larger values place leakage farther apart, while smaller values increase channel density and overlap. Must be positive to take effect. |
+| seed      | number | _auto_    | RNG seed for reproducible noise (optional)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+
+Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
+
+---
+
+#### `HoundTTS.UpdateSession(sessionId, update_params)`
+
+Updates the position of a live transmission (TTS, tone, or noise). Can be called frequently (e.g., every 0.5s from a scheduler) to track a moving unit.
+
+```lua
+local sessionId = HoundTTS.TransmitNoise(...)
+
+-- Track a moving unit
+local unit = Unit.getByName("JammerPlatform")
+local function trackPosition(_, t)
+    if not HoundTTS.UpdateSession(sessionId, { point = unit:getPoint() }) then
+        return nil  -- session ended (transmission finished or killed)
+    end
+    return t + 0.5  -- check again in 0.5 seconds
+end
+timer.scheduleFunction(trackPosition, nil, timer.getTime() + 0.5)
+```
+
+| Argument      | Type   | Description                                                           |
+| ------------- | ------ | --------------------------------------------------------------------- |
+| sessionId     | string | Session ID returned by `Transmit`, `TransmitTone`, or `TransmitNoise` |
+| update_params | table  | Position update parameters (see below)                                |
+
+**`update_params`** (table):
+
+| Field | Type   | Description                                                 |
+| ----- | ------ | ----------------------------------------------------------- |
+| point | Vec3   | DCS position (e.g., `Unit:getPoint()`)                      |
+| lat   | number | Explicit latitude (overrides point-derived value)           |
+| lon   | number | Explicit longitude (overrides point-derived value)          |
+| alt   | number | Explicit altitude in meters (overrides point-derived value) |
+
+Returns: `true` if the session is still alive, `false` if the session was found but has ended, and `nil` if the session was not found. The Lua wrapper converts `point` into explicit `lat`/`lon`/`alt` values before calling the native binding `HoundTTS.updateSession`, so the session lookup and return semantics are dictated by the native binding implementation. Use this return value to break out of position-update loops.
+
+---
+
+#### `HoundTTS.KillSession(sessionId)`
+
+Stops a live transmission (TTS, tone, or noise) identified by `sessionId`. For noise jammers this terminates the transmission immediately.
+
+```lua
+local sessionId = HoundTTS.TransmitNoise(...)
+-- ... later ...
+HoundTTS.KillSession(sessionId)
+```
+
+| Argument  | Type   | Description                                                           |
+| --------- | ------ | --------------------------------------------------------------------- |
+| sessionId | string | Session ID returned by `Transmit`, `TransmitTone`, or `TransmitNoise` |
+
+Returns: `true` if the session was found and killed, `false` otherwise.
 
 ---
 
@@ -605,7 +765,7 @@ MissionScripting.lua
 │       │
 │       ├─ require("HoundTTS")   ← loads HoundTTS.dll (pre-sanitization)
 │       ├─ reads optional Config\HoundTTS.lua
-│       └─ defines HoundTTS.TextToSpeech / Transmit / TestTone / getSpeechTime / round
+│       └─ defines HoundTTS.TextToSpeech / Transmit / TransmitTone / TransmitNoise / UpdateSession / KillSession / TestTone / Translate / getSpeechTime / round
 │
 └─ sanitizeModule('os','io','lfs') + remove require/package
        ↓
@@ -639,6 +799,9 @@ src/
     ├── shared/
     │   └── google/
     │       └── google_auth.*       # Shared Google OAuth2 JWT auth (used by TTS + Translate)
+    ├── generators/
+    │   ├── noise.*                 # White/chirp/harsh/jam noise generators
+    │   └── tone.*                  # Sine-wave tone generator
     ├── tts/
     │   ├── azure/
     │   │   └── azure_tts.*        # Azure Cognitive Services REST API
