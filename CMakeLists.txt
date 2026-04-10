@@ -115,6 +115,7 @@ if(MSVC)
         /W3            # reasonable warning level
         /wd4996        # deprecation warnings from older SDK headers
         /wd4267        # size_t → int narrowing in third-party headers
+        /MP            # multi-process compilation (parallel .cpp files)
     )
 endif()
 

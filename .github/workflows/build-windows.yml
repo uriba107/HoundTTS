@@ -65,6 +65,31 @@ jobs:
           Write-Host "Docker daemon OS: $os"
 
       # --------------------------------------------------------
+      # 2c. Derive cache tag from branch name
+      # --------------------------------------------------------
+      - name: Derive cache tag
+        id: cache-tag
+        shell: powershell
+        # Pass the ref through an env var instead of interpolating it directly
+        # into the script body — branch / tag names can contain PowerShell
+        # metacharacters ($, `, ", etc.) and direct interpolation is a script
+        # injection vector.
+        env:
+          RAW_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          $ref = $env:RAW_REF
+          if ([string]::IsNullOrWhiteSpace($ref)) { $ref = "unknown" }
+          # Sanitize to Docker tag grammar: [a-z0-9._-], must start with alnum.
+          $tag = ($ref -replace '[^a-zA-Z0-9._-]', '-').ToLower()
+          # Strip leading non-alnum so the tag starts with an allowed char.
+          $tag = $tag -replace '^[^a-z0-9]+', ''
+          if ([string]::IsNullOrEmpty($tag)) { $tag = "unknown" }
+          # Docker tag max length is 128 chars.
+          if ($tag.Length -gt 128) { $tag = $tag.Substring(0, 128) }
+          Write-Host "Cache tag: $tag"
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+
+      # --------------------------------------------------------
       # 3. Log in to ghcr.io and pull/refresh the deps layer cache
       # --------------------------------------------------------
       - name: Log in to GitHub Container Registry
@@ -76,14 +101,34 @@ jobs:
 
       - name: Pull deps cache image (best-effort)
         shell: powershell
-        run: docker pull ${{ env.DEPS_IMAGE }}:latest; exit 0
+        run: |
+          $tag = "${{ steps.cache-tag.outputs.TAG }}"
+          $actualTag = $tag
+          $pulled = $false
+          $ErrorActionPreference = 'SilentlyContinue'
+          docker pull "${{ env.DEPS_IMAGE }}:${tag}" 2>$null
+          if ($LASTEXITCODE -eq 0) { $pulled = $true }
+          if (-not $pulled -and $tag -ne "main") {
+            docker pull "${{ env.DEPS_IMAGE }}:main" 2>$null
+            if ($LASTEXITCODE -eq 0) { 
+              $pulled = $true
+              $actualTag = "main"
+            }
+          }
+          $ErrorActionPreference = 'Stop'
+          if ($pulled) {
+            $imageId = docker inspect --format='{{.Id}}' "${{ env.DEPS_IMAGE }}:${actualTag}"
+            docker tag $imageId "${{ env.DEPS_IMAGE }}:current"
+          }
+          exit 0
 
       - name: Build and push deps stage
         shell: powershell
         run: |
+          $tag = "${{ steps.cache-tag.outputs.TAG }}"
           $buildArgs = @("build", "--isolation=hyperv", "-f", "Dockerfile.windows",
-            "-t", "${{ env.DEPS_IMAGE }}:latest",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:latest",
+            "-t", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
             "--target", "deps")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
@@ -93,11 +138,10 @@ jobs:
           $buildArgs += "."
           docker @buildArgs
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
-          if ("${{ github.event_name }}" -ne "pull_request") {
-            docker push ${{ env.DEPS_IMAGE }}:latest
-            if ($LASTEXITCODE -ne 0) { throw "docker push (deps) failed" }
-          } else {
-            Write-Host "Skipping push (pull_request event - read-only token)" -ForegroundColor Yellow
+          docker tag "${{ env.DEPS_IMAGE }}:${tag}" "${{ env.DEPS_IMAGE }}:current"
+          docker push "${{ env.DEPS_IMAGE }}:${tag}"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: could not push deps image (fork PR token?)" -ForegroundColor Yellow
           }
 
       # --------------------------------------------------------
@@ -123,10 +167,11 @@ jobs:
       - name: Build Docker image
         shell: powershell
         run: |
+          $tag = "${{ steps.cache-tag.outputs.TAG }}"
           $buildArgs = @("build", "--isolation=hyperv", "-f", "Dockerfile.windows",
             "-t", "houndtts-builder-msvc",
             "--target", "output",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:latest",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
             "--build-arg", "HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }}")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2

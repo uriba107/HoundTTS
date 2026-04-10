@@ -4,6 +4,9 @@ REM This batch file invokes build-docker.ps1 for systems without PowerShell scri
 
 setlocal
 
+REM Capture start time in ISO format (locale-independent)
+for /f "usebackq" %%i in (`powershell -Command "Get-Date -Format o"`) do set "START_TIME=%%i"
+
 REM Get the directory where this batch file is located
 set "SCRIPT_DIR=%~dp0"
 set "PS_SCRIPT=%SCRIPT_DIR%build-docker.ps1"
@@ -33,4 +36,17 @@ REM -ExecutionPolicy Bypass allows the script to run regardless of system policy
 REM -NoProfile avoids loading user profile for faster startup
 powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%PS_SCRIPT%" %*
 
-exit /b %ERRORLEVEL%
+REM Preserve build exit code before PowerShell timing command overwrites ERRORLEVEL
+set "BUILD_EXIT=%ERRORLEVEL%"
+
+REM Calculate and display elapsed time — guard against missing/invalid START_TIME
+echo.
+echo --------------------------------------------------
+if defined START_TIME (
+    powershell -Command "try { $start = [DateTime]::Parse($env:START_TIME); $end = Get-Date; $diff = $end - $start; Write-Host 'Build completed in:' $diff.ToString('hh\:mm\:ss\.fff') } catch { Write-Host 'Build duration unavailable' }"
+) else (
+    echo Build duration unavailable
+)
+echo --------------------------------------------------
+
+exit /b %BUILD_EXIT%
