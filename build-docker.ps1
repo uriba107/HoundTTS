@@ -82,6 +82,7 @@ if ($Windows) {
     Check-DepPin "git"     $deps['GIT_VERSION']           "https://api.github.com/repos/git-for-windows/git/releases/latest"    { param($r) $r.tag_name -replace '^v','' -replace '\.windows\.\d+$','' }
     Check-DepPin "vcpkg"   $deps['VCPKG_TAG']             "https://api.github.com/repos/microsoft/vcpkg/releases/latest"        { param($r) $r.tag_name }
     Check-DepPin "httplib" $deps['HTTPLIB_VERSION']       "https://api.github.com/repos/yhirose/cpp-httplib/releases/latest"    { param($r) $r.tag_name }
+    Check-DepPin "piper"   $deps['PIPER1_GPL_TAG']        "https://api.github.com/repos/OHF-Voice/piper1-gpl/releases/latest"   { param($r) $r.tag_name }
 
     if ($anyOutdated) {
         Write-Host ""

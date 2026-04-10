@@ -30,6 +30,10 @@ static const luaL_Reg HoundTTS_funcs[] = {
     { "init",                 l_init                },
     { "textToSpeech",         l_textToSpeech        },
     { "getSpeechTime",        l_getSpeechTime       },
+    { "startNoise",           l_startNoise          },
+    { "startTone",            l_startTone           },
+    { "updateSession",        l_updateSession       },
+    { "killAllSessions",      l_killAllSessions     },
     { "translateAsync",       l_translateAsync      },
     { "getTranslationResult", l_getTranslationResult},
     { nullptr, nullptr }

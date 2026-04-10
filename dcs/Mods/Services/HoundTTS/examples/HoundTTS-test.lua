@@ -119,6 +119,9 @@ local tests = {
     -- Test tone (confirms SRS connection before any provider runs)
     { type = "tone" },
 
+    -- 8-second white noise burst (confirms noise jammer path)
+    { type = "noise" },
+
     -- getSpeechTime return value sanity check (no transmission)
     { type = "getSpeechTime" },
 
@@ -352,6 +355,18 @@ for i, t in ipairs(activeTests) do
             end)
             if not ok then
                 env.error("[HoundTTS-test] TestTone FAILED: " .. tostring(err))
+            end
+        elseif t.type == "noise" then
+            env.info("[HoundTTS-test] " .. i .. ": Test noise (8s jam)")
+            local ok, err = pcall(function()
+                HoundTTS.TransmitNoise(
+                    { freqs = TEST_FREQ, modulations = TEST_MOD, coalition = TEST_COALITION,
+                      name = "HoundTTS-Test-Noise" },
+                    { noiseType = "jam", volume = 1.0, duration = 8 }
+                )
+            end)
+            if not ok then
+                env.error("[HoundTTS-test] Noise test FAILED: " .. tostring(err))
             end
         else
             local tp = type(t[3]) == "string" and baseTP(t[3]) or t[3]

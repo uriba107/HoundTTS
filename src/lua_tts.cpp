@@ -2,6 +2,7 @@
 #include "lua_helpers.h"
 #include "backends/srs/srs_backend.h"
 #include "tts_pipeline.h"
+#include "session.h"
 #include "config_reader.h"
 #include "speech_time.h"
 #include "provider.h"
@@ -10,6 +11,14 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <random>
+#include <chrono>
+#include <sstream>
+#include <set>
+#include <cmath>
+#include <vector>
+#include <functional>
+#include <mutex>
 
 // ---------------------------------------------------------------------------
 // Backend factory
@@ -17,6 +26,105 @@
 static HoundTTS::ITTSBackend* MakeBackend(const std::string& transmitter) {
     // if (transmitter == "discord") return new HoundTTS::DiscordBackend();
     return new HoundTTS::SRSBackend();
+}
+
+// ---------------------------------------------------------------------------
+// GenerateSessionId — produces a short unique string ID
+// ---------------------------------------------------------------------------
+static std::string GenerateSessionId() {
+    // Thread-local RNG seeded once + atomic counter prevents duplicates on rapid calls
+    static std::atomic<uint64_t> sCounter{0};
+    thread_local std::mt19937_64 rng([] {
+        uint64_t seed = static_cast<uint64_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        try { seed ^= std::random_device{}(); } catch (...) {}
+        return seed;
+    }());
+    uint64_t r = rng() ^ sCounter.fetch_add(1, std::memory_order_relaxed);
+    char buf[20];
+    std::snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)r);
+    return std::string(buf);
+}
+
+// ---------------------------------------------------------------------------
+// ExpandFreqs — frequency spread / leakage simulation
+//
+// Parses a comma-separated MHz string (e.g. "251.0,305.0") and for each
+// center frequency generates adjacent channels spaced stepKhz apart out to
+// ±spreadKhz. Results are deduplicated by rounded-Hz key so overlapping
+// peaks (e.g. "251.0,252.0") never double-transmit the same channel.
+//
+// SRS FreqCloseEnough threshold = ±500 Hz, so stepKhz >= 1.0 keeps channels
+// audibly distinct. Defaults: stepKhz=25 (standard AM spacing), spreadKhz=250
+// (±10 channels = ±250 kHz around each center).
+// ---------------------------------------------------------------------------
+static void ExpandFreqs(const std::string& freqsIn,
+                        const std::string& modsIn,
+                        double             spreadKhz,
+                        double             stepKhz,
+                        std::string&       freqsOut,
+                        std::string&       modsOut)
+{
+    std::vector<double>      centers;
+    std::vector<std::string> mods;
+    {
+        std::stringstream sf(freqsIn), sm(modsIn);
+        std::string tok;
+        while (std::getline(sf, tok, ','))
+            try { centers.push_back(std::stod(tok)); } catch (...) {}
+        while (std::getline(sm, tok, ','))
+            mods.push_back(tok);
+    }
+    if (centers.empty() ||
+        !std::isfinite(spreadKhz) || !std::isfinite(stepKhz) ||
+        spreadKhz <= 0.0 || stepKhz <= 0.0) {
+        freqsOut = freqsIn; modsOut = modsIn; return;
+    }
+
+    // Enforce a minimum step (1 Hz) to avoid division-by-zero or absurd step counts
+    // and a hard cap on steps to prevent unbounded loops / memory growth if the
+    // caller passes extreme inputs.
+    static constexpr double kMinStepKhz = 1e-3; // 1 Hz
+    static constexpr int    kMaxSteps   = 10000;
+    if (stepKhz < kMinStepKhz) stepKhz = kMinStepKhz;
+
+    const double spreadHz = spreadKhz * 1000.0;
+    const double stepHz   = stepKhz   * 1000.0;
+
+    std::set<long long>                        seen;
+    std::vector<std::pair<double,std::string>> result;
+
+    auto tryAdd = [&](double freqMhz, const std::string& mod) {
+        if (!std::isfinite(freqMhz)) return;
+        long long key = static_cast<long long>(std::round(freqMhz * 1e6));
+        if (seen.insert(key).second)
+            result.emplace_back(freqMhz, mod);
+    };
+
+    for (size_t ci = 0; ci < centers.size(); ++ci) {
+        double      cMhz = centers[ci];
+        std::string mod  = (ci < mods.size()) ? mods[ci]
+                         : mods.empty() ? "AM" : mods.back();
+        tryAdd(cMhz, mod);
+        double stepsD = std::floor(spreadHz / stepHz);
+        if (!std::isfinite(stepsD) || stepsD < 0.0) stepsD = 0.0;
+        if (stepsD > static_cast<double>(kMaxSteps)) stepsD = static_cast<double>(kMaxSteps);
+        int steps = static_cast<int>(stepsD);
+        for (int s = 1; s <= steps; ++s) {
+            double off = (stepHz * s) / 1e6;
+            tryAdd(cMhz + off, mod);
+            tryAdd(cMhz - off, mod);
+        }
+    }
+
+    std::ostringstream sf, sm;
+    for (size_t i = 0; i < result.size(); ++i) {
+        if (i > 0) { sf << ','; sm << ','; }
+        sf << result[i].first;
+        sm << result[i].second;
+    }
+    freqsOut = sf.str();
+    modsOut  = sm.str();
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +153,7 @@ static HoundTTS::ITTSBackend* MakeBackend(const std::string& transmitter) {
 //   .volume       number
 //   .engine       string  (aws/polly: "standard"|"neural"|"generative")
 //
-// Returns: estimated speech time in seconds (number)
+// Returns: speechTime (number), sessionId (string)
 // ---------------------------------------------------------------------------
 int l_textToSpeech(lua_State* L) {
     const char* message = luaL_checkstring(L, 1);
@@ -96,19 +204,24 @@ int l_textToSpeech(lua_State* L) {
         req.translateSourceLanguage = GetTableString(L, 4, "source_language", "en");
     }
 
+    // Create and register a session for this transmission
+    std::string sessionId = GenerateSessionId();
+    auto session = HoundTTS::SessionManager::Instance().Register(sessionId);
+
     // Build TransmitParams from the request (pure routing — no TTS logic)
     HoundTTS::TransmitParams txParams;
-    txParams.host       = req.srsHost.empty() ? "127.0.0.1" : req.srsHost;
-    txParams.port       = req.srsPort;
-    txParams.freqs      = req.freqs;
+    txParams.host        = req.srsHost.empty() ? "127.0.0.1" : req.srsHost;
+    txParams.port        = req.srsPort;
+    txParams.freqs       = req.freqs;
     txParams.modulations = req.modulations;
-    txParams.encrypt    = req.encrypt;
-    txParams.encKey     = static_cast<uint8_t>(req.encKey);
-    txParams.coalition  = req.coalition;
-    txParams.name       = req.name;
-    txParams.lat        = req.lat;
-    txParams.lon        = req.lon;
-    txParams.alt        = req.alt;
+    txParams.encrypt     = req.encrypt;
+    txParams.encKey      = static_cast<uint8_t>(req.encKey);
+    txParams.coalition   = req.coalition;
+    txParams.name        = req.name;
+    txParams.lat         = req.lat;
+    txParams.lon         = req.lon;
+    txParams.alt         = req.alt;
+    txParams.session     = session;
 
     // Shared PCM queue: pipeline produces, backend consumes
     auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
@@ -127,7 +240,8 @@ int l_textToSpeech(lua_State* L) {
     double speechTime = HoundTTS::GetSpeechTime(
         static_cast<int>(req.message.size()), speed, provider);
     lua_pushnumber(L, speechTime);
-    return 1;
+    lua_pushstring(L, sessionId.c_str());
+    return 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,5 +286,244 @@ int l_getSpeechTime(lua_State* L) {
     log.Debug("getSpeechTime", "result=" + std::to_string(result));
 
     lua_pushnumber(L, result);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.startNoise(txParams, noiseParams) → sessionId
+//
+// txParams  : table — same shape as textToSpeech arg 2
+// noiseParams : table
+//   .noiseType  string  "white" (default) | "chirp" | "harsh" | "jam"
+//   .volume     number  0.0–1.0 (default 1.0)
+//   .seed       number  RNG seed (optional, auto-generated if absent)
+//
+// Returns: sessionId (string)
+// ---------------------------------------------------------------------------
+int l_startNoise(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);  // tx
+    luaL_checktype(L, 2, LUA_TTABLE);  // noiseParams
+
+    // Transmission params
+    std::string transmitter = GetTableString(L, 1, "transmitter", "srs");
+    std::string host        = GetTableString(L, 1, "host",        "localhost");
+    int         port        = GetTableInt   (L, 1, "port",        5002);
+    std::string freqs       = GetTableString(L, 1, "freqs",       "251.0");
+    std::string modulations = GetTableString(L, 1, "modulations", "AM");
+    int         coalition   = GetTableInt   (L, 1, "coalition",   0);
+    std::string name        = GetTableString(L, 1, "name",        "HoundTTS-Jammer");
+    bool        encrypt     = GetTableBool  (L, 1, "encrypt",     false);
+    int         encKey      = GetTableInt   (L, 1, "encKey",      0);
+    double      lat         = GetTableNumber(L, 1, "lat",         91.0);
+    double      lon         = GetTableNumber(L, 1, "lon",         181.0);
+    double      alt         = GetTableNumber(L, 1, "alt",         -500.0);
+
+    // Noise params
+    std::string noiseType  = GetTableString(L, 2, "noiseType",  "white");
+    float       volume     = static_cast<float>(GetTableNumber(L, 2, "volume", 1.0));
+    double      duration   = GetTableNumber(L, 2, "duration",   0.0);  // <=0 = continuous
+    double      spreadKhz  = GetTableNumber(L, 2, "spreadKhz", 250.0); // ±bandwidth; 0 = off
+    double      stepKhz    = GetTableNumber(L, 2, "stepKhz",    25.0); // channel spacing
+
+    // Expand freqs/modulations to simulate RF leakage across adjacent channels
+    std::string expandedFreqs = freqs;
+    std::string expandedMods  = modulations;
+    ExpandFreqs(freqs, modulations, spreadKhz, stepKhz, expandedFreqs, expandedMods);
+
+    // Seed: explicit or time-based
+    uint32_t seed;
+    lua_getfield(L, 2, "seed");
+    if (lua_isnumber(L, -1)) {
+        seed = static_cast<uint32_t>(lua_tointeger(L, -1));
+    } else {
+        auto t = std::chrono::steady_clock::now().time_since_epoch().count();
+        seed = static_cast<uint32_t>(t ^ (t >> 32));
+    }
+    lua_pop(L, 1);
+
+    // Register session
+    std::string sessionId = GenerateSessionId();
+    auto session = HoundTTS::SessionManager::Instance().Register(sessionId);
+
+    // Build TransmitParams
+    HoundTTS::TransmitParams txParams;
+    txParams.host        = host.empty() ? "127.0.0.1" : host;
+    txParams.port        = port;
+    txParams.freqs       = expandedFreqs;
+    txParams.modulations = expandedMods;
+    txParams.encrypt     = encrypt;
+    txParams.encKey      = static_cast<uint8_t>(encKey);
+    txParams.coalition   = coalition;
+    txParams.name        = name;
+    txParams.lat         = lat;
+    txParams.lon         = lon;
+    txParams.alt         = alt;
+    txParams.session     = session;
+
+    // Shared PCM queue: noise generator produces, backend consumes
+    auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
+
+    std::unique_ptr<HoundTTS::ITTSBackend> backend(MakeBackend(transmitter));
+
+    // Detach thread: noise generator runs concurrently with backend transmitting
+    std::thread([pcmQueue, txParams, noiseType, seed, volume, duration, session,
+                 b = std::shared_ptr<HoundTTS::ITTSBackend>(backend.release())]() {
+        std::thread([pcmQueue, session, noiseType, seed, volume, duration]() {
+            HoundTTS::TTSPipeline::ProduceNoise(pcmQueue, session, noiseType, seed, volume, duration);
+        }).detach();
+        b->Transmit(pcmQueue, txParams);
+    }).detach();
+
+    lua_pushstring(L, sessionId.c_str());
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.startTone(txParams, toneParams) → sessionId
+//
+// txParams  : table — same shape as startNoise / textToSpeech arg 2
+// toneParams : table
+//   .duration  number  seconds (default 2.0; <=0 defaults to 2.0)
+//   .freqHz    number  Hz (default 440.0)
+//   .volume    number  0.0–1.0 (default 1.0)
+//
+// Returns: sessionId (string)
+// ---------------------------------------------------------------------------
+int l_startTone(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);  // tx
+    luaL_checktype(L, 2, LUA_TTABLE);  // toneParams
+
+    // Transmission params
+    std::string transmitter = GetTableString(L, 1, "transmitter", "srs");
+    std::string host        = GetTableString(L, 1, "host",        "localhost");
+    int         port        = GetTableInt   (L, 1, "port",        5002);
+    std::string freqs       = GetTableString(L, 1, "freqs",       "251.0");
+    std::string modulations = GetTableString(L, 1, "modulations", "AM");
+    int         coalition   = GetTableInt   (L, 1, "coalition",   0);
+    std::string name        = GetTableString(L, 1, "name",        "HoundTTS-Tone");
+    bool        encrypt     = GetTableBool  (L, 1, "encrypt",     false);
+    int         encKey      = GetTableInt   (L, 1, "encKey",      0);
+    double      lat         = GetTableNumber(L, 1, "lat",         91.0);
+    double      lon         = GetTableNumber(L, 1, "lon",         181.0);
+    double      alt         = GetTableNumber(L, 1, "alt",         -500.0);
+
+    // Tone params
+    double duration = GetTableNumber(L, 2, "duration", 2.0);
+    float  freqHz   = static_cast<float>(GetTableNumber(L, 2, "freqHz", 440.0));
+    float  volume   = static_cast<float>(GetTableNumber(L, 2, "volume", 1.0));
+
+    // Register session (tone is finite — session lets caller kill early if needed)
+    std::string sessionId = GenerateSessionId();
+    auto session = HoundTTS::SessionManager::Instance().Register(sessionId);
+
+    // Build TransmitParams
+    HoundTTS::TransmitParams txParams;
+    txParams.host        = host.empty() ? "127.0.0.1" : host;
+    txParams.port        = port;
+    txParams.freqs       = freqs;
+    txParams.modulations = modulations;
+    txParams.encrypt     = encrypt;
+    txParams.encKey      = static_cast<uint8_t>(encKey);
+    txParams.coalition   = coalition;
+    txParams.name        = name;
+    txParams.lat         = lat;
+    txParams.lon         = lon;
+    txParams.alt         = alt;
+    txParams.session     = session;
+
+    auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
+    std::unique_ptr<HoundTTS::ITTSBackend> backend(MakeBackend(transmitter));
+
+    std::thread([pcmQueue, txParams, duration, freqHz, volume, session,
+                 b = std::shared_ptr<HoundTTS::ITTSBackend>(backend.release())]() {
+        std::thread([pcmQueue, session, duration, freqHz, volume]() {
+            HoundTTS::TTSPipeline::ProduceTone(pcmQueue, session, duration, freqHz, volume);
+        }).detach();
+        b->Transmit(pcmQueue, txParams);
+    }).detach();
+
+    lua_pushstring(L, sessionId.c_str());
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.updateSession(sessionId, updateParams) → boolean
+//
+// sessionId    : string — from startNoise or textToSpeech
+// updateParams : table  — all fields optional
+//   .lat   number  — new latitude
+//   .lon   number  — new longitude
+//   .alt   number  — new altitude
+//   .alive bool    — set false to stop/kill the session
+//
+// Returns: true if session found AND still alive (transmission ongoing)
+//          false if session found but transmission has ended (naturally or killed)
+//          nil   if session not found
+// ---------------------------------------------------------------------------
+int l_updateSession(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    auto session = HoundTTS::SessionManager::Instance().Get(std::string(id));
+    if (!session) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    // Position update — SRS-specific; only fires if backend attached SRSPositionData
+    std::shared_ptr<HoundTTS::SRSPositionData> posData;
+    { std::lock_guard<std::mutex> lk(session->backendMutex);
+      posData = std::static_pointer_cast<HoundTTS::SRSPositionData>(session->backendData); }
+    if (posData) {
+        bool hasPos = false;
+        lua_getfield(L, 2, "lat");
+        if (lua_isnumber(L, -1)) { posData->lat.store(lua_tonumber(L, -1)); hasPos = true; }
+        lua_pop(L, 1);
+
+        lua_getfield(L, 2, "lon");
+        if (lua_isnumber(L, -1)) { posData->lon.store(lua_tonumber(L, -1)); hasPos = true; }
+        lua_pop(L, 1);
+
+        lua_getfield(L, 2, "alt");
+        if (lua_isnumber(L, -1)) { posData->alt.store(lua_tonumber(L, -1)); hasPos = true; }
+        lua_pop(L, 1);
+
+        // If any position field changed and a sync callback is registered, fire it immediately.
+        // Invoke under syncMutex so the SRSClient teardown (which also acquires
+        // syncMutex before clearing the callback) cannot race with a callback
+        // that captures `this` by raw pointer; otherwise the lambda could fire
+        // on a destroyed SRSClient. The callback itself only issues a single
+        // short TCP JSON frame so holding the mutex is bounded.
+        if (hasPos) {
+            std::lock_guard<std::mutex> lk(posData->syncMutex);
+            if (posData->sendPositionSync) {
+                posData->positionDirty.store(true);
+                posData->sendPositionSync();
+            }
+        }
+    }
+
+    // Kill signal — backend-agnostic; all backends honour session->alive
+    lua_getfield(L, 2, "alive");
+    if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) {
+        session->alive.store(false);
+    }
+    lua_pop(L, 1);
+
+    // Return alive state — false signals the transmission has ended (naturally or killed)
+    lua_pushboolean(L, session->alive.load() ? 1 : 0);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.killAllSessions() → number
+//
+// Kills every active session.  Returns the number of sessions killed.
+// Called from Lua on mission end to ensure no transmissions survive a restart.
+// ---------------------------------------------------------------------------
+int l_killAllSessions(lua_State* L) {
+    auto& mgr = HoundTTS::SessionManager::Instance();
+    int killed = mgr.KillAll();
+    lua_pushinteger(L, killed);
     return 1;
 }

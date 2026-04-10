@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "provider.h"
 #include "backends/pcm_queue.h"
+#include "session.h"
 
 namespace HoundTTS {
 
@@ -71,6 +72,10 @@ struct TransmitParams {
     double      lat        = 91.0;
     double      lon        = 181.0;
     double      alt        = -500.0;
+
+    // Optional session for position updates and kill signal.
+    // nullptr means fire-and-forget (legacy TTS with no update support).
+    std::shared_ptr<Session> session;
 };
 
 // Abstract backend interface.

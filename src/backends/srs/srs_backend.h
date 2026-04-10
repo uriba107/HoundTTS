@@ -4,9 +4,37 @@
 #define HOUNDTTS_SRS_BACKEND_H
 
 #include "backend.h"
+#include <atomic>
+#include <functional>
+#include <mutex>
 
 namespace HoundTTS {
 
+// ---------------------------------------------------------------------------
+// SRSPositionData — SRS-specific extension stored in session->backendData.
+// Only meaningful for SRS transmissions; other backends use their own struct.
+// ---------------------------------------------------------------------------
+struct SRSPositionData {
+    // Position — updated by l_updateSession; read by SRS streaming thread
+    std::atomic<double> lat{91.0};    // >90  = unset
+    std::atomic<double> lon{181.0};   // >180 = unset
+    std::atomic<double> alt{-500.0};  // <-499 = unset
+
+    // Dirty flag — set when position changes, cleared after TCP re-sync
+    std::atomic<bool> positionDirty{false};
+
+    // Callback to send a TCP position re-sync on the active SRS connection.
+    // Set by SRSClient when the stream starts; called by l_updateSession.
+    // Protected by syncMutex — lock before reading, writing, or invoking.
+    std::mutex syncMutex;
+    std::function<void()> sendPositionSync;
+
+    SRSPositionData() = default;
+    SRSPositionData(const SRSPositionData&) = delete;
+    SRSPositionData& operator=(const SRSPositionData&) = delete;
+};
+
+// ---------------------------------------------------------------------------
 // ITTSBackend implementation that transmits over the SRS protocol.
 // Receives 16kHz mono PCM from the shared TTSPipeline, Opus-encodes it,
 // then streams over the SRS TCP/UDP protocol.

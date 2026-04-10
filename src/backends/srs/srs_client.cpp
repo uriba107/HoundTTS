@@ -14,6 +14,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <mutex>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "winmm.lib")
@@ -148,6 +149,8 @@ bool SRSClient::Connect(const std::string& host, int port) {
 
 bool SRSClient::Handshake(int coalition, const std::string& name,
                            const std::vector<FreqMod>& freqs) {
+    m_coalition = coalition;
+    m_name      = name;
     std::string clientInfo = BuildClientInfoJson(coalition, name, freqs);
 
     // Message type 2 = MessageSync
@@ -192,7 +195,9 @@ void SRSClient::SendPing() {
 
 void SRSClient::StreamFromQueue(AudioQueue& queue,
                                  const std::vector<FreqMod>& freqs,
-                                 uint32_t unitId) {
+                                 uint32_t unitId,
+                                 std::shared_ptr<HoundTTS::Session> session,
+                                 std::shared_ptr<SRSPositionData> posData) {
     // Build a silence Opus frame (used when queue is momentarily empty)
     // A single Opus frame of silence is just encoding 640 zero samples.
     // We pre-encode it here using a temporary encoder.
@@ -245,6 +250,27 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     state.silenceFrame = silenceFrame;
     state.finished.store(false);
 
+    // Register position-sync callback on posData so l_updateSession can trigger it immediately.
+    // coalition and name are captured from the Handshake call stored in m_coalition / m_name.
+    if (posData) {
+        int         cap_coalition = m_coalition;
+        std::string cap_name      = m_name;
+        std::lock_guard<std::mutex> lk(posData->syncMutex);
+        posData->sendPositionSync = [this, posData, freqs, cap_coalition, cap_name]() {
+            double lat = posData->lat.load();
+            double lon = posData->lon.load();
+            double alt = posData->alt.load();
+            std::string clientInfo = BuildClientInfoJson(cap_coalition, cap_name, freqs, lat, lon, alt);
+            std::ostringstream sync;
+            sync << R"({"Version":")"
+                 << kSRSVersion
+                 << R"(","MsgType":2,"Client":)"
+                 << clientInfo << "}";
+            SendTCP(sync.str());
+            posData->positionDirty.store(false);
+        };
+    }
+
     timeBeginPeriod(1);
     MMRESULT timerId = timeSetEvent(
         40, 0,
@@ -252,18 +278,25 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         reinterpret_cast<DWORD_PTR>(&state),
         TIME_PERIODIC);
 
-    // Wait until timer callback signals done, sending TCP pings every 15s
+    // Wait until timer callback signals done, sending TCP pings every 15s.
+    // Also checks session->alive (noise jammer kill).
     auto lastPing = std::chrono::steady_clock::now();
     while (!state.finished.load()) {
+        // Kill signal from session (noise jammer stop)
+        if (session && !session->alive.load()) {
+            state.finished.store(true);
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         auto now = std::chrono::steady_clock::now();
         if (now - lastPing >= std::chrono::seconds(15)) {
             std::string ping = std::string(R"({"Version":")") + kSRSVersion +
-                               R"(","MsgType":1,"Client":{"ClientGuid":")" +
-                               m_guid + R"(","Name":"","Coalition":0,)" +
-                               R"("RadioInfo":{"radios":[],"unit":"","unitId":0,)" +
-                               R"("iff":{"control":0,"mode1":0,"mode2":0,"mode3":0,"mode4":false,"mic":0,"status":0},)" +
-                               R"("ambient":{"vol":0,"abType":""}}}})" ;
+                               R"(","MsgType":1,"Client":{"ClientGuid":")"
+                               + m_guid + R"(","Name":"","Coalition":0,)"
+                               + R"("RadioInfo":{"radios":[],"unit":"","unitId":0,)"
+                               + R"("iff":{"control":0,"mode1":0,"mode2":0,"mode3":0,"mode4":false,"mic":0,"status":0},)"
+                               + R"("ambient":{"vol":0,"abType":""}}}})"
+                               ;
             SendTCP(ping);
             lastPing = now;
         }
@@ -271,6 +304,12 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
 
     if (timerId) timeKillEvent(timerId);
     timeEndPeriod(1);
+
+    // Clear position-sync callback — client is about to disconnect
+    if (posData) {
+        std::lock_guard<std::mutex> lk(posData->syncMutex);
+        posData->sendPositionSync = nullptr;
+    }
 }
 
 void SRSClient::Disconnect() {
@@ -352,13 +391,26 @@ void SRSClient::SendUDP(const std::vector<uint8_t>& data) {
 }
 
 bool SRSClient::SendTCP(const std::string& json) {
+    std::lock_guard<std::mutex> lock(m_tcpMutex);
     std::string msg = json + "\n";
-    int sent = send(m_tcp, msg.c_str(), static_cast<int>(msg.size()), 0);
-    return sent == static_cast<int>(msg.size());
+    const char* ptr = msg.c_str();
+    int remaining = static_cast<int>(msg.size());
+    while (remaining > 0) {
+        int n = send(m_tcp, ptr, remaining, 0);
+        if (n == SOCKET_ERROR || n <= 0) {
+            LogE("SRS TCP send failed (WSA=" + std::to_string(WSAGetLastError()) +
+                 ", remaining=" + std::to_string(remaining) + ")");
+            return false;
+        }
+        ptr       += n;
+        remaining -= n;
+    }
+    return true;
 }
 
 std::string SRSClient::BuildClientInfoJson(int coalition, const std::string& name,
-                                            const std::vector<FreqMod>& freqs) const {
+                                            const std::vector<FreqMod>& freqs,
+                                            double lat, double lon, double alt) const {
     // Build radios array — field names must match SRS C# [JsonProperty] names (lowercase)
     std::ostringstream radios;
     radios << "[";
@@ -375,14 +427,26 @@ std::string SRSClient::BuildClientInfoJson(int coalition, const std::string& nam
     }
     radios << "]";
 
+    // Include LatLngPosition only when valid values are provided
+    bool hasPos = (lat >= -90.0 && lat <= 90.0 &&
+                   lon >= -180.0 && lon <= 180.0 &&
+                   alt > -499.0);
+
     std::ostringstream ci;
+    ci << std::fixed << std::setprecision(6);
     ci << "{"
        << R"("ClientGuid":")" << m_guid << "\","
        << R"("Name":")"       << name   << "\","
        << R"("Seat":0,)"
        << R"("Coalition":)"   << coalition << ","
-       << R"("AllowRecord":true,)"
-       << R"("RadioInfo":{"radios":)" << radios.str()
+       << R"("AllowRecord":true,)";
+    if (hasPos) {
+        ci << R"("LatLngPosition":{"lat":)" << lat
+           << R"(,"lng":)" << lon
+           << R"(,"alt":)" << std::fixed << std::setprecision(1) << alt
+           << "},";
+    }
+    ci << R"("RadioInfo":{"radios":)" << radios.str()
        << R"(,"unit":"HoundTTS")"
        << R"(,"unitId":100000002)"
        << R"(,"iff":{"control":2,"mode1":-1,"mode2":-1,"mode3":-1,"mode4":false,"mic":-1,"status":0})"
