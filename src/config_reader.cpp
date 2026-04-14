@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 
 namespace HoundTTS {
@@ -29,6 +30,8 @@ void ConfigReader::Load(const std::string& writedir) {
     // Reset all config members so stale values from a previous Load() don't carry over
     piperPath_.clear();
     piperVoicePath_.clear();
+    piperThreads_ = 4;
+    piperMaxConcurrent_ = 4;
     googleCredsFile_.clear();
     azureKey_.clear();
     azureRegion_.clear();
@@ -131,6 +134,16 @@ void ConfigReader::ParseIni(const std::string& content) {
                 piperPath_ = val;
             }
             if (key == "voice_path") piperVoicePath_ = val;
+            if (key == "threads") {
+                int v = 0;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v > 0) piperThreads_ = v;
+            }
+            if (key == "max_concurrent") {
+                int v = 0;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v > 0) piperMaxConcurrent_ = v;
+            }
         } else if (section == "Google") {
             if (key == "credentials_file") googleCredsFile_ = val;
         } else if (section == "Azure") {
@@ -174,6 +187,14 @@ std::string ConfigReader::GetPiperPath() const {
 std::string ConfigReader::GetPiperVoicePath() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return piperVoicePath_;
+}
+int ConfigReader::GetPiperThreads() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return piperThreads_;
+}
+int ConfigReader::GetPiperMaxConcurrent() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return piperMaxConcurrent_;
 }
 std::string ConfigReader::GetGoogleCredsFile() const {
     std::lock_guard<std::mutex> lock(mutex_);

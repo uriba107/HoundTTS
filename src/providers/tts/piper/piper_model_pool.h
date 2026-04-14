@@ -9,6 +9,7 @@
 #include <map>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 
 namespace HoundTTS {
 
@@ -20,7 +21,10 @@ namespace HoundTTS {
 //   - After synthesis, the handle is returned to the pool for reuse (model stays loaded).
 //   - piper_synthesize_start (espeak-ng phonemization) is serialized via espeakMutex_
 //     because espeak-ng uses global process state. This step is fast (~1-5 ms).
-//   - piper_synthesize_next (ONNX inference) runs fully concurrently across instances.
+//   - piper_synthesize_next (ONNX inference) runs concurrently across instances,
+//     but the total number of ACTIVE synthesizers is capped by maxActive_ to prevent
+//     ORT/memory exhaustion under burst load. Excess Acquire() calls block until
+//     a slot frees up in Release().
 class PiperModelPool {
 public:
     static PiperModelPool& Instance();
@@ -52,6 +56,12 @@ private:
     std::mutex poolMutex_;
     std::mutex espeakMutex_;
     std::map<std::string, std::vector<piper_synthesizer*>> pool_;
+
+    // Bounded active-synthesizer semaphore (guarded by poolMutex_).
+    // maxActive_ is lazily initialized from config on first Acquire().
+    std::condition_variable activeCv_;
+    int  activeCount_ = 0;
+    int  maxActive_   = 0;   // 0 = uninitialized, set on first Acquire()
 };
 
 } // namespace HoundTTS

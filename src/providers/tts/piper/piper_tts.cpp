@@ -1,12 +1,14 @@
 #include "piper_tts.h"
 #include "piper_native.h"
 #include "piper_model_pool.h"
+#include "piper_voice_registry.h"
 #include "utils.h"
 
 #include <windows.h>
 
 #include <string>
 #include <vector>
+#include <mutex>
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
@@ -136,6 +138,13 @@ std::string PiperTTS::ResolvePiperExe(const std::string& piperPath) {
     if (!dir.empty() && dir.back() != '\\' && dir.back() != '/')
         dir += '\\';
     return dir + "piper.exe";
+}
+
+void PiperTTS::EnsureInitialized(const std::string& voicesPath) {
+    // Idempotency is delegated to PiperVoiceRegistry::EnsureInitialized —
+    // a local std::call_once would permanently freeze the first voicesPath
+    // seen, defeating any config reload that changes the voices folder.
+    PiperVoiceRegistry::Instance().EnsureInitialized(voicesPath, PIPER_DEFAULT_VOICE);
 }
 
 // ---------------------------------------------------------------------------

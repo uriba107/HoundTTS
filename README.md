@@ -339,6 +339,15 @@ path =
 ; Path to folder containing .onnx voice model files
 ; Leave blank to use bundled voices\ folder
 voice_path =
+; ONNX intra-op threads per synthesis session (default 4)
+threads = 4
+; Max concurrent piper synthesizers GLOBALLY (across all voices, default 4).
+; Excess requests queue instead of spawning unbounded ORT sessions.
+; Tuning rule: max_concurrent x threads <= 2 x physical CPU cores.
+;   8+ cores: max_concurrent=4, threads=4   (16 ORT threads peak)
+;   4-6 cores: max_concurrent=2, threads=4  ( 8 ORT threads peak)
+;   weak box: max_concurrent=1, threads=2
+max_concurrent = 4
 
 [Google]
 ; Path to a Google Cloud service-account JSON file.
@@ -633,10 +642,10 @@ HoundTTS.KillSession(jammerId)
 | Field     | Type   | Default   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------- | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | noiseType | string | `"white"` | `"white"` / `"pink"` / `"chirp"` / `"harsh"` / `"jam"` — all tuned for channel jamming. `"white"`/`"pink"`: overdriven 1/f pink noise (dense, full-spectrum). `"chirp"`: noise floor + 8 fast-swept sines with overdrive. `"harsh"`: noise floor + 8 rapid square-wave oscillators with heavy overdrive (most aggressive). `"jam"`: anti-denoise + anti-AGC mode — pink noise + ultra-short oscillators (5–35 ms) + duty-cycle AM pulses + random bursts; designed to resist both the SRS client's Speex noise reduction and its incoming-audio AGC normalization. |
-| volume    | number | `1.0`     | Output level (0.0 = silence, 1.0 = full) |
-| duration  | number | `0`       | Duration in seconds. 0 = runs until killed (hard-capped at 7200 s / 2 hours) |
-| spreadKhz | number | `250`     | Total adjacent-channel spectral spread in kHz. Controls the maximum ±bandwidth around each center frequency for adjacent-channel tones and leakage. Larger values create wider spectral leakage; smaller values keep noise more tightly clustered. Must be positive to take effect and interacts with `stepKhz`, `noiseType`, `volume`, and `duration`. |
-| stepKhz   | number | `25`      | Spacing between adjacent-channel tones in kHz. Defaults to 25 kHz standard AM spacing. Larger values place leakage farther apart, while smaller values increase channel density and overlap. Must be positive to take effect. |
+| volume    | number | `1.0`     | Output level (0.0 = silence, 1.0 = full)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| duration  | number | `0`       | Duration in seconds. 0 = runs until killed (hard-capped at 7200 s / 2 hours)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| spreadKhz | number | `250`     | Total adjacent-channel spectral spread in kHz. Controls the maximum ±bandwidth around each center frequency for adjacent-channel tones and leakage. Larger values create wider spectral leakage; smaller values keep noise more tightly clustered. Must be positive to take effect and interacts with `stepKhz`, `noiseType`, `volume`, and `duration`.                                                                                                                                                                                                            |
+| stepKhz   | number | `25`      | Spacing between adjacent-channel tones in kHz. Defaults to 25 kHz standard AM spacing. Larger values place leakage farther apart, while smaller values increase channel density and overlap. Must be positive to take effect.                                                                                                                                                                                                                                                                                                                                      |
 | seed      | number | _auto_    | RNG seed for reproducible noise (optional)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
@@ -645,7 +654,7 @@ Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
 
 #### `HoundTTS.UpdateSession(sessionId, update_params)`
 
-Updates the position of a live transmission (TTS, tone, or noise). Can be called frequently (e.g., every 0.5s from a scheduler) to track a moving unit.
+Updates the position of a live transmission (TTS, tone, or noise). It can be called frequently (e.g., every 0.5s from a scheduler) to track a moving unit.
 
 ```lua
 local sessionId = HoundTTS.TransmitNoise(...)
