@@ -4,6 +4,7 @@
 # 3) Add #include <filesystem> for std::filesystem::path (used by patch 1)
 # 4) piper_impl.hpp: replace global Ort::Env with lazy-init accessor (GLE 1114 fix)
 # 5) piper.cpp: use ort_env() accessor instead of bare global
+# 6) Limit ONNX intra-op threads per session via HOUNDTTS_PIPER_THREADS env var (default 4)
 
 $f = 'C:\piper1-gpl\libpiper\src\piper.cpp'
 $c = [System.IO.File]::ReadAllText($f)
@@ -11,7 +12,7 @@ $c = [System.IO.File]::ReadAllText($f)
 # Patch 1: Session constructor (uses ort_env() accessor from patch 5)
 $old1lf   = "synth->session = std::make_unique<Ort::Session>(`n        Ort::Session(ort_env, model_path, synth->session_options));"
 $old1crlf = "synth->session = std::make_unique<Ort::Session>(`r`n        Ort::Session(ort_env, model_path, synth->session_options));"
-$new1     = "std::wstring _mp = std::filesystem::path(model_path).wstring();`n    synth->session = std::make_unique<Ort::Session>(ort_env(), _mp.c_str(), synth->session_options);"
+$new1     = "{ const char* _htenv = std::getenv(`"HOUNDTTS_PIPER_THREADS`"); int _ht = (_htenv && _htenv[0]) ? std::atoi(_htenv) : 4; if (_ht < 1) _ht = 4; synth->session_options.SetIntraOpNumThreads(_ht); }`n    std::wstring _mp = std::filesystem::path(model_path).wstring();`n    synth->session = std::make_unique<Ort::Session>(ort_env(), _mp.c_str(), synth->session_options);"
 
 if ($c.Contains($old1lf)) {
     $c = $c.Replace($old1lf, $new1)
@@ -34,13 +35,23 @@ if ($c.Contains($old2)) {
     throw "patch2: GetOutputNames pattern not found in piper.cpp"
 }
 
-# Patch 3: Add #include <filesystem> for std::filesystem::path (used by patch 1)
+# Patch 3: Add #include <filesystem> and <cstdlib> for std::filesystem::path (used by patch 1)
 $fsInclude = '#include <filesystem>'
-if (-not $c.Contains($fsInclude)) {
-    $c = $c.Replace('#include <limits>', "#include <limits>`n#include <filesystem>")
-    Write-Host "patch3 applied (added <filesystem> include)"
+$cstdlibInclude = '#include <cstdlib>'
+$needsFilesystem = -not $c.Contains($fsInclude)
+$needsCstdlib = -not $c.Contains($cstdlibInclude)
+
+if ($needsFilesystem -or $needsCstdlib) {
+    if (-not $c.Contains('#include <limits>')) {
+        throw "patch3: anchor '#include <limits>' not found in piper.cpp; cannot inject <filesystem>/<cstdlib> includes"
+    }
+    $newIncludes = '#include <limits>'
+    if ($needsFilesystem) { $newIncludes += "`n#include <filesystem>" }
+    if ($needsCstdlib) { $newIncludes += "`n#include <cstdlib>" }
+    $c = $c.Replace('#include <limits>', $newIncludes)
+    Write-Host "patch3 applied (added $(if ($needsFilesystem) { '<filesystem> ' })$(if ($needsCstdlib) { '<cstdlib>' })includes)"
 } else {
-    Write-Host "patch3 skipped (<filesystem> already present)"
+    Write-Host "patch3 skipped (<filesystem> and <cstdlib> already present)"
 }
 
 # Patch 4 (NEW): replace ort_env bare reference with ort_env() call

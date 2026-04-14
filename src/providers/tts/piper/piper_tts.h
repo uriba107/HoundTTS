@@ -9,6 +9,9 @@
 
 namespace HoundTTS {
 
+// Default fallback voice for Piper TTS
+static constexpr const char* PIPER_DEFAULT_VOICE = "en_US-lessac-low";
+
 // Synthesizes text via piper.dll (preferred) or piper.exe subprocess (deprecated fallback).
 // Pushes 16kHz mono int16 PCM chunks into queue. Calls queue.MarkDone() on completion.
 class PiperTTS {
@@ -27,6 +30,10 @@ public:
         double speed,
         double volume,
         PCMQueue& queue);
+
+    // Initialize Piper subsystem (voice registry, etc).
+    // Safe to call multiple times; lazy initialization on first call.
+    static void EnsureInitialized(const std::string& voicesPath);
 
 private:
     // Native DLL path: in-process synthesis via piper.dll model pool.

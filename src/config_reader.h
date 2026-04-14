@@ -22,6 +22,11 @@ public:
     // [Piper]
     std::string GetPiperPath() const;     // dir containing piper.dll (or piper.exe fallback)
     std::string GetPiperVoicePath() const;
+    int         GetPiperThreads() const;  // ONNX intra-op threads per session (default 4)
+    int         GetPiperMaxConcurrent() const;  // global cap on concurrently-active synthesizers
+                                                // across ALL models (enforced by
+                                                // PiperModelPool::activeCount_ / maxActive_,
+                                                // not per-model) (default 4)
 
     // [Google]
     std::string GetGoogleCredsFile() const;
@@ -73,6 +78,8 @@ private:
 
     std::string piperPath_;
     std::string piperVoicePath_;
+    int         piperThreads_ = 4;
+    int         piperMaxConcurrent_ = 4;
     std::string googleCredsFile_;
     std::string azureKey_;
     std::string azureRegion_;

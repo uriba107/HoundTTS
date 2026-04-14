@@ -4,6 +4,7 @@
 #include "providers/generators/noise.h"
 #include "providers/tts/sapi/sapi_tts.h"
 #include "providers/tts/piper/piper_tts.h"
+#include "providers/tts/piper/piper_voice_registry.h"
 #include "providers/tts/azure/azure_tts.h"
 #include "providers/tts/google/google_tts.h"
 #include "providers/tts/elevenlabs/elevenlabs_tts.h"
@@ -24,12 +25,17 @@
 #include <cmath>
 #include <vector>
 #include <cstdint>
+#include <cctype>
 
 namespace HoundTTS {
 
 static const char* kTag = "HoundTTS/Pipeline";
 static void LogE(const std::string& msg) { Logger::Instance().Error(kTag, msg); }
 static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
+// Logger has no Warn level — route warnings through Error so they are never
+// suppressed at LEVEL_ERROR. The "[WARNING]" prefix keeps them distinguishable
+// from true errors in the log.
+static void LogW(const std::string& msg) { Logger::Instance().Error(kTag, "[WARNING] " + msg); }
 
 void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue) {
     TtsProvider  provider  = req.provider;
@@ -122,6 +128,9 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
     // --- TTS synthesis dispatch ---
 
     if (provider == TtsProvider::Piper) {
+        // Ensure Piper subsystem is initialized (lazy init, voice registry scan, etc)
+        PiperTTS::EnsureInitialized(piperVoicePath);
+
         // Resolve model path: piperVoicePath + voice (+ culture prefix if needed)
         auto hasLocalePrefix = [](const std::string& v) {
             if (v.size() < 6) return false;
@@ -142,12 +151,51 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             modelName = voice;
         }
 
+        // Normalise basename: registry stores names without ".onnx" suffix and
+        // compares case-insensitively, so strip the extension (case-insensitive)
+        // from what we look up. piperModel still carries the full file path +
+        // ".onnx" below for actual synthesis.
+        auto hasOnnxSuffix = [](const std::string& s) {
+            if (s.size() < 5) return false;
+            std::string tail = s.substr(s.size() - 5);
+            for (char& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return tail == ".onnx";
+        };
+        std::string basename = hasOnnxSuffix(modelName)
+                                   ? modelName.substr(0, modelName.size() - 5)
+                                   : modelName;
+
         std::string piperModel = piperVoicePath;
         if (!piperModel.empty() && piperModel.back() != '\\' && piperModel.back() != '/')
             piperModel += '\\';
         piperModel += modelName;
-        if (piperModel.size() < 5 || piperModel.substr(piperModel.size()-5) != ".onnx")
+        if (!hasOnnxSuffix(piperModel))
             piperModel += ".onnx";
+
+        // --- Piper voice validation with fallback ---
+        auto& voiceRegistry = PiperVoiceRegistry::Instance();
+        
+        // Check if requested voice is available
+        if (!voiceRegistry.IsVoiceAvailable(basename)) {
+            // Requested voice not found, try fallback
+            LogW("Piper voice not found: " + modelName + ". Falling back to default (" + PIPER_DEFAULT_VOICE + ")");
+            
+            // Check if default voice is available
+            if (!voiceRegistry.IsDefaultVoiceAvailable()) {
+                // Default voice also not available, abort synthesis
+                LogE("Default Piper voice not available. Aborting synthesis.");
+                queue->MarkDone();
+                return;
+            }
+            
+            // Use default voice path
+            piperModel = piperVoicePath;
+            if (!piperModel.empty() && piperModel.back() != '\\' && piperModel.back() != '/')
+                piperModel += '\\';
+            piperModel += PIPER_DEFAULT_VOICE;
+            if (!hasOnnxSuffix(piperModel))
+                piperModel += ".onnx";
+        }
 
         // Streaming: detach synthesis thread so consumer can start immediately
         std::thread([message, piperModel, piperPath, speaker, speed, volume, queue]() {
