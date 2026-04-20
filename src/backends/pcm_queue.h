@@ -15,6 +15,13 @@ namespace HoundTTS {
 // Thread-safe queue of 16kHz mono 16-bit PCM sample chunks.
 // Producer calls Push() then MarkDone() when finished.
 // Consumer calls Pop() which blocks until a chunk is available or done.
+//
+// Subclassing note: any override of PCMQueue::MarkDone() MUST ultimately
+// cause m_done to be set and m_cv to be notified — either by calling
+// PCMQueue::MarkDone() at the end of the override, or by replicating its
+// body. Otherwise consumers blocked in PCMQueue::Pop() will never wake up
+// once the producer stops pushing chunks. See CachingPCMQueue::MarkDone
+// for an example that forwards completion to a downstream PCMQueue.
 class PCMQueue {
 public:
     PCMQueue() : m_done(false) {}

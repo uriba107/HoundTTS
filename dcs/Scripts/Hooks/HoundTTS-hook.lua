@@ -46,12 +46,23 @@ end
 
 function houndtts_hooks.onSimulationStop()
     -- Flush PCM cache when returning to UI (mission end / restart).
-    pcall(function()
-        if HoundTTS and HoundTTS.clearPCMCache then
+    -- The mission-side HoundTTS global (populated by HoundTTS-mission.lua via
+    -- luaopen_HoundTTS) owns clearPCMCache. This hook runs in the GUI hook
+    -- Lua state where HoundTTS is nil, so dispatch into the mission state.
+    local cmd = [[
+        if HoundTTS and type(HoundTTS.clearPCMCache) == "function" then
             HoundTTS.clearPCMCache()
-            log.write("HoundTTS", log.INFO, "PCM cache cleared on mission end")
+            env.info("[HoundTTS] PCM cache cleared on mission end")
+        else
+            env.error("[HoundTTS] clearPCMCache unavailable on mission stop "..
+                "(HoundTTS="..tostring(HoundTTS)..")")
         end
-    end)
+    ]]
+    local ok, err = pcall(net.dostring_in, "mission", cmd)
+    if not ok then
+        log.write("HoundTTS", log.ERROR,
+            "Failed to dispatch PCM cache flush: " .. tostring(err))
+    end
 end
 
 local ok, regErr = pcall(Sim.setUserCallbacks, houndtts_hooks)
