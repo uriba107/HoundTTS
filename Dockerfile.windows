@@ -22,7 +22,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; \
      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
 
-ARG CMAKE_VERSION=4.3.0
+ARG CMAKE_VERSION=4.3.1
 ARG GIT_VERSION=2.53.0
 ARG WGET_VERSION=1.21.4
 ARG UNZIP_VERSION=6.0
@@ -65,7 +65,7 @@ RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.
     C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
-ARG HTTPLIB_VERSION=v0.38.0
+ARG HTTPLIB_VERSION=v0.43.1
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
@@ -99,7 +99,7 @@ RUN git clone --branch %PIPER1_GPL_TAG% --depth 1 \
 
 # Patch piper for onnxruntime 1.22.0 API + DLL-safe init (see patch_piper.ps1)
 # PIPER_PATCH_VER is a cache-buster: bump in deps.env to force this layer to rebuild.
-ARG PIPER_PATCH_VER=1
+ARG PIPER_PATCH_VER=20260414
 COPY tools/patch_piper.ps1 C:/tools/
 RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_piper.ps1
 

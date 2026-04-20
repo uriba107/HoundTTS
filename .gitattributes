@@ -1,6 +1,8 @@
-# Normalise to LF in the repo, check out as CRLF on Windows.
+# Normalise all text files to LF in the repo and on checkout.
 # macOS/Dropbox sync: keeps diffs clean regardless of local line endings.
-* text=auto eol=crlf
+# Git for Windows tools still handle LF transparently, and the build
+# pipeline does not require CRLF-terminated sources.
+* text=auto eol=lf
 
 # Binary files — never touch
 *.dll binary
