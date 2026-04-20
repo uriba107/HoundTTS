@@ -44,6 +44,16 @@ function houndtts_hooks.onMissionLoadEnd()
         "See dcs.log for mission-side load result.")
 end
 
+function houndtts_hooks.onSimulationStop()
+    -- Flush PCM cache when returning to UI (mission end / restart).
+    pcall(function()
+        if HoundTTS and HoundTTS.clearPCMCache then
+            HoundTTS.clearPCMCache()
+            log.write("HoundTTS", log.INFO, "PCM cache cleared on mission end")
+        end
+    end)
+end
+
 local ok, regErr = pcall(Sim.setUserCallbacks, houndtts_hooks)
 if not ok then
     log.write("HoundTTS", log.ERROR,

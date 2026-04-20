@@ -63,6 +63,9 @@ public:
 
     // [General]
     std::string GetLogLevel() const;  // "error" | "info", default "error"
+    bool GetCacheEnabled() const;     // default true
+    int  GetCacheMaxMb() const;       // default 100
+    int  GetCacheTtlMinutes() const;  // default 5, 0 = no TTL
 
     // Writedir used for bundled-default path resolution
     std::string GetWritedir() const;
@@ -98,6 +101,9 @@ private:
     std::string awsPollyEngine_;
     std::string discordToken_;
     std::string logLevel_;
+    bool cacheEnabled_ = true;
+    int  cacheMaxMb_   = 100;
+    int  cacheTtlMin_  = 5;
 
     void ParseIni(const std::string& content);
     static std::string Trim(const std::string& s);

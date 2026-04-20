@@ -2,6 +2,7 @@
 #include "lua_helpers.h"
 #include "backends/srs/srs_backend.h"
 #include "tts_pipeline.h"
+#include "backends/pcm_cache.h"
 #include "session.h"
 #include "config_reader.h"
 #include "speech_time.h"
@@ -525,5 +526,47 @@ int l_killAllSessions(lua_State* L) {
     auto& mgr = HoundTTS::SessionManager::Instance();
     int killed = mgr.KillAll();
     lua_pushinteger(L, killed);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.clearPCMCache() → nil
+//
+// Drops all cached PCM entries and resets hit/miss stats.
+// Call from onMissionEnd hook or whenever a full cache flush is desired.
+// ---------------------------------------------------------------------------
+int l_clearPCMCache(lua_State* L) {
+    (void)L;
+    HoundTTS::PCMCache::Instance().Clear();
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.getCacheStats() → table
+//
+// Returns: { entries=N, bytes=N, hits=N, misses=N, insertions=N, evictions=N }
+// ---------------------------------------------------------------------------
+int l_getCacheStats(lua_State* L) {
+    auto stats = HoundTTS::PCMCache::Instance().GetStats();
+    lua_newtable(L);
+
+    lua_pushinteger(L, static_cast<lua_Integer>(stats.entries));
+    lua_setfield(L, -2, "entries");
+
+    lua_pushinteger(L, static_cast<lua_Integer>(stats.bytes));
+    lua_setfield(L, -2, "bytes");
+
+    lua_pushinteger(L, static_cast<lua_Integer>(stats.hits));
+    lua_setfield(L, -2, "hits");
+
+    lua_pushinteger(L, static_cast<lua_Integer>(stats.misses));
+    lua_setfield(L, -2, "misses");
+
+    lua_pushinteger(L, static_cast<lua_Integer>(stats.insertions));
+    lua_setfield(L, -2, "insertions");
+
+    lua_pushinteger(L, static_cast<lua_Integer>(stats.evictions));
+    lua_setfield(L, -2, "evictions");
+
     return 1;
 }

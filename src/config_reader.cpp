@@ -50,6 +50,9 @@ void ConfigReader::Load(const std::string& writedir) {
     awsPollyEngine_.clear();
     discordToken_.clear();
     logLevel_.clear();
+    cacheEnabled_ = true;
+    cacheMaxMb_   = 100;
+    cacheTtlMin_  = 5;
 
     std::string path = writedir;
     if (!path.empty() && path.back() != '\\' && path.back() != '/')
@@ -171,6 +174,21 @@ void ConfigReader::ParseIni(const std::string& content) {
             if (key == "bot_token") discordToken_ = val;
         } else if (section == "General") {
             if (key == "log_level") logLevel_ = val;
+            if (key == "cache_enabled") {
+                std::string lower = val;
+                for (auto& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+                cacheEnabled_ = (lower != "false" && lower != "0" && lower != "no");
+            }
+            if (key == "cache_max_mb") {
+                int v = 0;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v > 0) cacheMaxMb_ = v;
+            }
+            if (key == "cache_ttl_minutes") {
+                int v = -1;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v >= 0) cacheTtlMin_ = v;
+            }
         }
     }
     // Defaults are applied in Load() after ParseIni() returns
@@ -267,6 +285,18 @@ std::string ConfigReader::GetLibreTranslateApiKey() const {
 std::string ConfigReader::GetLogLevel() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return logLevel_.empty() ? "error" : logLevel_;
+}
+bool ConfigReader::GetCacheEnabled() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cacheEnabled_;
+}
+int ConfigReader::GetCacheMaxMb() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cacheMaxMb_;
+}
+int ConfigReader::GetCacheTtlMinutes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cacheTtlMin_;
 }
 
 } // namespace HoundTTS
