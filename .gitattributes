@@ -1,0 +1,12 @@
+# Normalise to LF in the repo, check out as CRLF on Windows.
+# macOS/Dropbox sync: keeps diffs clean regardless of local line endings.
+* text=auto eol=crlf
+
+# Binary files — never touch
+*.dll binary
+*.exe binary
+*.lib binary
+*.onnx binary
+*.png binary
+*.ico binary
+*.wav binary

@@ -18,8 +18,9 @@ namespace HoundTTS {
 class PCMQueue {
 public:
     PCMQueue() : m_done(false) {}
+    virtual ~PCMQueue() = default;
 
-    void Push(std::vector<int16_t> chunk) {
+    virtual void Push(std::vector<int16_t> chunk) {
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_queue.push_back(std::move(chunk));
@@ -45,7 +46,7 @@ public:
         return {};
     }
 
-    void MarkDone() {
+    virtual void MarkDone() {
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_done = true;
