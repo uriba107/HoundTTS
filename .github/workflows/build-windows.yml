@@ -2,10 +2,10 @@ name: Build (Windows / MSVC)
 
 on:
   push:
-    branches: ["main"]
-    tags: ["v*"]
+    branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -76,8 +76,24 @@ jobs:
         # injection vector.
         env:
           RAW_REF: ${{ github.head_ref || github.ref_name }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
           $ref = $env:RAW_REF
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            # Tag build: resolve the branch the tagged commit lives on so we
+            # reuse that branch's deps cache instead of creating a tag-named one.
+            $containing = git branch -r --contains HEAD --format='%(refname:short)' 2>$null |
+              ForEach-Object { $_ -replace '^origin/','' } |
+              Where-Object { $_ -and $_ -ne 'HEAD' }
+            if ($containing -contains 'main') {
+              $ref = 'main'
+            } elseif ($containing.Count -gt 0) {
+              $ref = $containing[0]
+            } else {
+              $ref = 'main'
+            }
+            Write-Host "Tag build: using branch '$ref' for cache"
+          }
           if ([string]::IsNullOrWhiteSpace($ref)) { $ref = "unknown" }
           # Sanitize to Docker tag grammar: [a-z0-9._-], must start with alnum.
           $tag = ($ref -replace '[^a-zA-Z0-9._-]', '-').ToLower()
@@ -139,9 +155,13 @@ jobs:
           docker @buildArgs
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
           docker tag "${{ env.DEPS_IMAGE }}:${tag}" "${{ env.DEPS_IMAGE }}:current"
-          docker push "${{ env.DEPS_IMAGE }}:${tag}"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "WARNING: could not push deps image (fork PR token?)" -ForegroundColor Yellow
+          if ("${{ github.ref }}" -like 'refs/tags/*') {
+            Write-Host "Tag build: skipping deps cache push (would overwrite branch cache '${tag}')."
+          } else {
+            docker push "${{ env.DEPS_IMAGE }}:${tag}"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "WARNING: could not push deps image (fork PR token?)" -ForegroundColor Yellow
+            }
           }
 
       # --------------------------------------------------------

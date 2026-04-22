@@ -377,12 +377,32 @@ model = tts-1
 ; Chat model for translation
 chat_model = gpt-4o-mini
 
+; DEPRICATED! use openai endpoint instead
 [KittenTTS]
 ; Full base URL of your Kitten TTS Server instance (https://github.com/uriba107/Kitten-TTS-Server)
 ; Include scheme and port, no trailing slash.
 ; Example: endpoint = http://192.168.10.30:8005
 endpoint =
+
+[General]
+; PCM cache settings for synthesized audio buffers (16kHz mono PCM)
+; Cache reduces latency for repeated TTS requests with identical parameters
+cache_enabled = true          ; Enable/disable in-memory PCM cache (default: true)
+cache_max_mb = 100            ; Maximum cache size in MB (default: 100)
+cache_ttl_minutes = 5         ; Cache entry TTL in minutes, 0 = no expiration (default: 5)
 ```
+
+### PCM Cache
+
+HoundTTS includes an in-memory LRU cache for synthesized PCM audio buffers (16kHz mono). This cache reduces latency for repeated TTS requests with identical parameters (provider, message, voice, etc.). Cache entries are evicted based on least-recently-used order and optional time-to-live. Configure via the `[General]` section in `HoundTTS-credentials.ini`.
+
+### PCM Cache
+
+HoundTTS includes an in-memory LRU cache for synthesized PCM audio buffers (16kHz mono). This cache reduces latency for repeated TTS requests with identical parameters (provider, message, voice, etc.). Cache entries are evicted based on least-recently-used order and optional time-to-live. Configure via the `[General]` section in `HoundTTS-credentials.ini`.
+
+### PCM Cache
+
+HoundTTS includes an in-memory LRU cache for synthesized PCM audio buffers (16kHz mono). This cache reduces latency for repeated TTS requests with identical parameters (provider, message, voice, etc.). Cache entries are evicted based on least-recently-used order and optional time-to-live. Configure via the `[General]` section in `HoundTTS-credentials.ini`.
 
 ## Usage (in mission scripts)
 
