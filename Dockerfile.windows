@@ -22,8 +22,8 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; \
      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
 
-ARG CMAKE_VERSION=4.3.1
-ARG GIT_VERSION=2.53.0
+ARG CMAKE_VERSION=4.3.2
+ARG GIT_VERSION=2.54.0
 ARG WGET_VERSION=1.21.4
 ARG UNZIP_VERSION=6.0
 ARG STRAWBERRYPERL_VERSION=5.38.2.2

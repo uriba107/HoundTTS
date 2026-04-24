@@ -30,13 +30,22 @@ inline double GetSpeechTime(int length, double speed = 1.0,
             }
         }
         break;
+    case TtsProvider::Piper:
+        // Piper: length_scale = 1/speed, so speed=2 → 2x faster.
+        // Clamp to sane range to avoid division issues.
+        speedFactor = std::max(0.1, std::min(10.0, speed));
+        break;
     case TtsProvider::ElevenLabs:
-        // ElevenLabs: direct multiplier, clamped to 0.7–1.2
+        // ElevenLabs: direct multiplier, clamped 0.7–1.2
         speedFactor = std::max(0.7, std::min(1.2, speed));
         break;
-    case TtsProvider::Piper:
-        // Piper: speed is ignored by the engine
-        speedFactor = 1.0;
+    case TtsProvider::Google:
+        // Google: speakingRate, clamped 0.25–4.0
+        speedFactor = std::max(0.25, std::min(4.0, speed));
+        break;
+    case TtsProvider::AWS:
+        // AWS Polly: SSML prosody rate, clamped 0.2–2.0
+        speedFactor = std::max(0.2, std::min(2.0, speed));
         break;
     case TtsProvider::KittenTTS:
         // KittenTTS: direct speed multiplier (0.1–4.0)
@@ -47,7 +56,7 @@ inline double GetSpeechTime(int length, double speed = 1.0,
         speedFactor = std::max(0.25, std::min(4.0, speed));
         break;
     default:
-        // Google, Azure, AWS, Unknown: direct multiplier
+        // Azure, Unknown: direct multiplier
         speedFactor = speed;
         break;
     }

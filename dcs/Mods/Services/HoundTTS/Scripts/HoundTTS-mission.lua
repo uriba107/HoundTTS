@@ -157,7 +157,7 @@ local function updateTrackedSessions(_,time)
     for sessionId, dcsObject in pairs(tracked_sessions) do
         if isDcsUnit(dcsObject) or isStaticObject(dcsObject) then
             if dcsObject:isExist() and dcsObject:getLife() >= 1 then
-                local alive = HoundTTS.UpdateSession(sessionId,{point = getTransmitterPos(dcsObject)})
+                local alive = HoundTTS.UpdateSession(sessionId,{point = isDcsUnit(dcsObject) and getTransmitterPos(dcsObject) or nil})
                 if not alive then
                     table.insert(toRemove, {sessionId, true})
                 end
@@ -496,9 +496,6 @@ end
 -- sessionId    : string — returned by Transmit / TransmitNoise / TransmitTone
 -- update_params (table):
 --   .point      DCS Vec3 (optional) — new transmitter position
---   .lat        number  (optional) — explicit lat/lon/alt (overrides .point)
---   .lon        number
---   .alt        number
 --
 -- Returns true if the session is still alive (transmission ongoing).
 -- Returns false if the session was not found OR the transmission has ended
@@ -517,25 +514,13 @@ function HoundTTS.UpdateSession(sessionId, update_params)
     if not sessionId then return false end
     local up = update_params or {}
 
-    local lat, lon, alt
-
-    -- Start from point if provided
-    if isPoint(up.point) then
-        lat, lon, alt = coord.LOtoLL(up.point)
-        lat = HoundTTS.round(lat, 4)
-        lon = HoundTTS.round(lon, 4)
-        alt = math.ceil(alt)
-    end
-
-    -- Explicit coordinates override point-derived values (partial overrides OK)
-    if up.lat then lat = up.lat end
-    if up.lon then lon = up.lon end
-    if up.alt then alt = up.alt end
-
     local updateTbl = {}
-    if lat ~= nil then updateTbl.lat = lat end
-    if lon ~= nil then updateTbl.lon = lon end
-    if alt ~= nil then updateTbl.alt = alt end
+    if isPoint(up.point) then
+        local lat, lon, alt = getCoords(up.point)
+        updateTbl.lat = lat
+        updateTbl.lon = lon
+        updateTbl.alt = alt
+    end
 
     -- _dll.updateSession returns:
     --   true  — session found and still alive
