@@ -234,12 +234,25 @@ int l_textToSpeech(lua_State* L) {
         b->Transmit(pcmQueue, txParams);
     }).detach();
 
-    double speed = req.speed;
-    if (speed <= -999.0)
-        speed = (provider == HoundTTS::TtsProvider::Sapi) ? 0.0 : 1.0;
+    // Exact duration on cache hit, heuristic estimate on miss.
+    // Peek is cheap (mutex + map lookup); TTSPipeline::Produce will re-check
+    // on the detached thread independently.
+    double speechTime = -1.0;
+    if (req.message != "__test_tone__") {
+        uint64_t cacheKey = HoundTTS::ComputeTTSRequestKey(req);
+        auto cached = HoundTTS::PCMCache::Instance().Get(cacheKey);
+        if (cached) {
+            speechTime = static_cast<double>(cached->size()) / 16000.0;
+        }
+    }
+    if (speechTime < 0.0) {
+        double speed = req.speed;
+        if (speed <= -999.0)
+            speed = (provider == HoundTTS::TtsProvider::Sapi) ? 0.0 : 1.0;
+        speechTime = HoundTTS::GetSpeechTime(
+            static_cast<int>(req.message.size()), speed, provider);
+    }
 
-    double speechTime = HoundTTS::GetSpeechTime(
-        static_cast<int>(req.message.size()), speed, provider);
     lua_pushnumber(L, speechTime);
     lua_pushstring(L, sessionId.c_str());
     return 2;
@@ -313,8 +326,7 @@ int l_startNoise(lua_State* L) {
     std::string modulations = GetTableString(L, 1, "modulations", "AM");
     int         coalition   = GetTableInt   (L, 1, "coalition",   0);
     std::string name        = GetTableString(L, 1, "name",        "HoundTTS-Jammer");
-    bool        encrypt     = GetTableBool  (L, 1, "encrypt",     false);
-    int         encKey      = GetTableInt   (L, 1, "encKey",      0);
+    // encrypt/encKey intentionally not read from Lua — noise is never encrypted
     double      lat         = GetTableNumber(L, 1, "lat",         91.0);
     double      lon         = GetTableNumber(L, 1, "lon",         181.0);
     double      alt         = GetTableNumber(L, 1, "alt",         -500.0);
@@ -352,8 +364,8 @@ int l_startNoise(lua_State* L) {
     txParams.port        = port;
     txParams.freqs       = expandedFreqs;
     txParams.modulations = expandedMods;
-    txParams.encrypt     = encrypt;
-    txParams.encKey      = static_cast<uint8_t>(encKey);
+    txParams.encrypt     = false;  // noise is never encrypted (encryption would just garble the noise)
+    txParams.encKey      = 0;
     txParams.coalition   = coalition;
     txParams.name        = name;
     txParams.lat         = lat;
@@ -402,8 +414,7 @@ int l_startTone(lua_State* L) {
     std::string modulations = GetTableString(L, 1, "modulations", "AM");
     int         coalition   = GetTableInt   (L, 1, "coalition",   0);
     std::string name        = GetTableString(L, 1, "name",        "HoundTTS-Tone");
-    bool        encrypt     = GetTableBool  (L, 1, "encrypt",     false);
-    int         encKey      = GetTableInt   (L, 1, "encKey",      0);
+    // encrypt/encKey intentionally not read from Lua — tone is never encrypted
     double      lat         = GetTableNumber(L, 1, "lat",         91.0);
     double      lon         = GetTableNumber(L, 1, "lon",         181.0);
     double      alt         = GetTableNumber(L, 1, "alt",         -500.0);
@@ -423,8 +434,8 @@ int l_startTone(lua_State* L) {
     txParams.port        = port;
     txParams.freqs       = freqs;
     txParams.modulations = modulations;
-    txParams.encrypt     = encrypt;
-    txParams.encKey      = static_cast<uint8_t>(encKey);
+    txParams.encrypt     = false; // Tone should not be encrypted
+    txParams.encKey      = 0;
     txParams.coalition   = coalition;
     txParams.name        = name;
     txParams.lat         = lat;
@@ -462,11 +473,13 @@ int l_startTone(lua_State* L) {
 //          nil   if session not found
 // ---------------------------------------------------------------------------
 int l_updateSession(lua_State* L) {
+    auto& log = HoundTTS::Logger::Instance();
     const char* id = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
 
     auto session = HoundTTS::SessionManager::Instance().Get(std::string(id));
     if (!session) {
+        log.Debug("updateSession", "session not found: " + std::string(id));
         lua_pushnil(L);
         return 1;
     }
@@ -477,17 +490,25 @@ int l_updateSession(lua_State* L) {
       posData = std::static_pointer_cast<HoundTTS::SRSPositionData>(session->backendData); }
     if (posData) {
         bool hasPos = false;
+        double newLat = 0, newLon = 0, newAlt = 0;
         lua_getfield(L, 2, "lat");
-        if (lua_isnumber(L, -1)) { posData->lat.store(lua_tonumber(L, -1)); hasPos = true; }
+        if (lua_isnumber(L, -1)) { newLat = lua_tonumber(L, -1); posData->lat.store(newLat); hasPos = true; }
         lua_pop(L, 1);
 
         lua_getfield(L, 2, "lon");
-        if (lua_isnumber(L, -1)) { posData->lon.store(lua_tonumber(L, -1)); hasPos = true; }
+        if (lua_isnumber(L, -1)) { newLon = lua_tonumber(L, -1); posData->lon.store(newLon); hasPos = true; }
         lua_pop(L, 1);
 
         lua_getfield(L, 2, "alt");
-        if (lua_isnumber(L, -1)) { posData->alt.store(lua_tonumber(L, -1)); hasPos = true; }
+        if (lua_isnumber(L, -1)) { newAlt = lua_tonumber(L, -1); posData->alt.store(newAlt); hasPos = true; }
         lua_pop(L, 1);
+
+        if (hasPos) {
+            log.Debug("updateSession", "session " + std::string(id)
+                      + " position: lat=" + std::to_string(newLat)
+                      + " lon=" + std::to_string(newLon)
+                      + " alt=" + std::to_string(newAlt));
+        }
 
         // If any position field changed and a sync callback is registered, fire it immediately.
         // Invoke under syncMutex so the SRSClient teardown (which also acquires
@@ -508,11 +529,15 @@ int l_updateSession(lua_State* L) {
     lua_getfield(L, 2, "alive");
     if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) {
         session->alive.store(false);
+        log.Debug("updateSession", "session " + std::string(id) + " killed");
     }
     lua_pop(L, 1);
 
+    bool alive = session->alive.load();
+    log.Debug("updateSession", "session " + std::string(id) + " updated, alive=" + (alive ? "true" : "false"));
+
     // Return alive state — false signals the transmission has ended (naturally or killed)
-    lua_pushboolean(L, session->alive.load() ? 1 : 0);
+    lua_pushboolean(L, alive ? 1 : 0);
     return 1;
 }
 
