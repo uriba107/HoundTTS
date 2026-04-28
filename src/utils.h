@@ -135,6 +135,10 @@ private:
 
 namespace Utils {
 
+// Generate a 22-character base57 UUID string compatible with SRS GUIDs.
+// Uses CoCreateGuid for the random source.
+std::string GenerateSRSGuid();
+
 // Convert UTF-8 std::string to wide string
 inline std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return L"";
