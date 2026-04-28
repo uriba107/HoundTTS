@@ -63,6 +63,7 @@ add_library(HoundTTS SHARED
     src/lua_translate.cpp
     src/tts_pipeline.cpp
     src/config_reader.cpp
+    src/utils.cpp
     src/backends/pcm_cache.cpp
     src/process_launcher.cpp
     src/backends/codecs/opus_encoder.cpp

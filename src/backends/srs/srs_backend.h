@@ -5,6 +5,7 @@
 
 #include "backend.h"
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
 
@@ -20,10 +21,14 @@ struct SRSPositionData {
     std::atomic<double> lon{181.0};   // >180 = unset
     std::atomic<double> alt{-500.0};  // <-499 = unset
 
-    // Dirty flag — set when position changes, cleared after TCP re-sync
-    std::atomic<bool> positionDirty{false};
+    // Last-sent position values and timestamp — for change-detection and heartbeat.
+    // Only touched while holding syncMutex.
+    double lastSentLat{91.0};
+    double lastSentLon{181.0};
+    double lastSentAlt{-500.0};
+    std::chrono::steady_clock::time_point lastSentAt{};  // zero = never
 
-    // Callback to send a TCP position re-sync on the active SRS connection.
+    // Callback to send a TCP position UPDATE on the active SRS connection.
     // Set by SRSClient when the stream starts; called by l_updateSession.
     // Protected by syncMutex — lock before reading, writing, or invoking.
     std::mutex syncMutex;

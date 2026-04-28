@@ -69,6 +69,11 @@ public:
                                     double lon = 181.0,
                                     double alt = -500.0) const;
 
+    // Build a minimal metadata-only JSON blob for MsgType=UPDATE position pushes.
+    // Mirrors the official SRS ClientCoalitionUpdate wire format: no RadioInfo.
+    std::string BuildClientMetadataJson(int coalition, const std::string& name,
+                                        double lat, double lon, double alt) const;
+
 private:
     SOCKET      m_tcp       = INVALID_SOCKET;
     SOCKET      m_udp       = INVALID_SOCKET;

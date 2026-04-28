@@ -44,6 +44,10 @@ Makefile
 .vscode/
 *.code-workspace
 
+# agents
+.claude/
+.cursor/
+
 # CLion
 .idea/
 *.iml

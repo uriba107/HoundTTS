@@ -30,6 +30,30 @@ static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
 // ---------------------------------------------------------------------------
 static const char* kSRSVersion = "2.1.0.2";
 
+static std::string EscapeJsonString(const std::string& value) {
+    std::ostringstream out;
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    out << "\\u"
+                        << std::hex << std::uppercase << std::setw(4) << std::setfill('0')
+                        << static_cast<int>(c)
+                        << std::dec << std::nouppercase;
+                } else {
+                    out << c;
+                }
+                break;
+        }
+    }
+    return out.str();
+}
+
 // UDP voice packet fixed-segment sizes (from skyeye/pkg/simpleradio/voice/packet.go)
 static const int kHeaderSize    = 6;   // PacketLength(2) + AudioSegLen(2) + FreqSegLen(2)
 static const int kFreqEntrySize = 10;  // float64(8) + modulation(1) + encryption(1)
@@ -252,22 +276,40 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
 
     // Register position-sync callback on posData so l_updateSession can trigger it immediately.
     // coalition and name are captured from the Handshake call stored in m_coalition / m_name.
+    // The lambda implements change-detection + 175s heartbeat to mirror the official SRS
+    // ClientCoalitionUpdate flow (MsgType=UPDATE=0, metadata-only, no RadioInfo).
     if (posData) {
         int         cap_coalition = m_coalition;
         std::string cap_name      = m_name;
         std::lock_guard<std::mutex> lk(posData->syncMutex);
-        posData->sendPositionSync = [this, posData, freqs, cap_coalition, cap_name]() {
+        // CONTRACT: caller MUST hold posData->syncMutex when invoking this callback.
+        // The lambda does NOT re-acquire syncMutex (std::mutex is non-recursive →
+        // would deadlock). Caller-held lock also prevents SRSClient teardown from
+        // clearing sendPositionSync / destroying `this` mid-invocation.
+        posData->sendPositionSync = [this, posData, cap_coalition, cap_name]() {
             double lat = posData->lat.load();
             double lon = posData->lon.load();
             double alt = posData->alt.load();
-            std::string clientInfo = BuildClientInfoJson(cap_coalition, cap_name, freqs, lat, lon, alt);
-            std::ostringstream sync;
-            sync << R"({"Version":")"
-                 << kSRSVersion
-                 << R"(","MsgType":2,"Client":)"
-                 << clientInfo << "}";
-            SendTCP(sync.str());
-            posData->positionDirty.store(false);
+
+            // Gate: skip if position unchanged AND within 175s heartbeat window
+            auto now = std::chrono::steady_clock::now();
+            bool posChanged = (lat != posData->lastSentLat ||
+                               lon != posData->lastSentLon ||
+                               alt != posData->lastSentAlt);
+            bool heartbeatDue = (posData->lastSentAt.time_since_epoch().count() == 0) ||
+                                (now - posData->lastSentAt >= std::chrono::seconds(175));
+            if (!posChanged && !heartbeatDue) return;
+
+            std::string metaJson = BuildClientMetadataJson(cap_coalition, cap_name, lat, lon, alt);
+            std::ostringstream msg;
+            msg << R"({"Version":")" << kSRSVersion
+                << R"(","MsgType":0,"Client":)" << metaJson << "}";
+            if (SendTCP(msg.str())) {
+                posData->lastSentLat = lat;
+                posData->lastSentLon = lon;
+                posData->lastSentAlt = alt;
+                posData->lastSentAt  = now;
+            }
         };
     }
 
@@ -279,6 +321,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         TIME_PERIODIC);
 
     // Wait until timer callback signals done, sending TCP pings every 15s.
+    // Also fires a position heartbeat every 175s when posData is active.
     // Also checks session->alive (noise jammer kill).
     auto lastPing = std::chrono::steady_clock::now();
     while (!state.finished.load()) {
@@ -299,6 +342,17 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
                                ;
             SendTCP(ping);
             lastPing = now;
+        }
+        // Position heartbeat: fire sendPositionSync every ~175s even with no Lua update.
+        // Invoke under syncMutex per the callback contract (serializes lastSent*
+        // access against l_updateSession). The lambda's own gate suppresses
+        // no-change calls, so this is cheap when nothing has moved.
+        if (posData) {
+            std::lock_guard<std::mutex> lk(posData->syncMutex);
+            bool heartbeatDue = (posData->lastSentAt.time_since_epoch().count() == 0) ||
+                                (now - posData->lastSentAt >= std::chrono::seconds(175));
+            if (heartbeatDue && posData->sendPositionSync)
+                posData->sendPositionSync();
         }
     }
 
@@ -427,31 +481,65 @@ std::string SRSClient::BuildClientInfoJson(int coalition, const std::string& nam
     }
     radios << "]";
 
-    // Include LatLngPosition only when valid values are provided
+    // Always emit LatLngPosition — server's MetaDataEquals dereferences its
+    // stored client.LatLngPosition without null-check on later UPDATEs, so
+    // omitting the field on SYNC causes NullReferenceException. Map our
+    // out-of-bounds sentinel (91/181/-500) → 0/0/0 to match the official
+    // client's `new LatLngPosition()` and avoid feeding bad coords to the
+    // server's distance / LOS math.
     bool hasPos = (lat >= -90.0 && lat <= 90.0 &&
                    lon >= -180.0 && lon <= 180.0 &&
                    alt > -499.0);
+    double wireLat = hasPos ? lat : 0.0;
+    double wireLon = hasPos ? lon : 0.0;
+    double wireAlt = hasPos ? alt : 0.0;
 
     std::ostringstream ci;
     ci << std::fixed << std::setprecision(6);
     ci << "{"
-       << R"("ClientGuid":")" << m_guid << "\","
-       << R"("Name":")"       << name   << "\","
+       << R"("ClientGuid":")" << EscapeJsonString(m_guid) << "\","
+       << R"("Name":")"       << EscapeJsonString(name)   << "\","
        << R"("Seat":0,)"
        << R"("Coalition":)"   << coalition << ","
-       << R"("AllowRecord":true,)";
-    if (hasPos) {
-        ci << R"("LatLngPosition":{"lat":)" << lat
-           << R"(,"lng":)" << lon
-           << R"(,"alt":)" << std::fixed << std::setprecision(1) << alt
-           << "},";
-    }
+       << R"("AllowRecord":true,)"
+       << R"("LatLngPosition":{"lat":)" << wireLat
+       << R"(,"lng":)" << wireLon
+       << R"(,"alt":)" << std::fixed << std::setprecision(1) << wireAlt
+       << "},";
     ci << R"("RadioInfo":{"radios":)" << radios.str()
        << R"(,"unit":"HoundTTS")"
        << R"(,"unitId":100000002)"
        << R"(,"iff":{"control":2,"mode1":-1,"mode2":-1,"mode3":-1,"mode4":false,"mic":-1,"status":0})"
        << R"(,"ambient":{"vol":1.0,"abType":""}})"
        << "}";
+    return ci.str();
+}
+
+std::string SRSClient::BuildClientMetadataJson(int coalition, const std::string& name,
+                                                double lat, double lon, double alt) const {
+    // Minimal metadata-only payload matching SRS ClientCoalitionUpdate (MsgType=UPDATE=0).
+    // No RadioInfo — mirrors the official client's partial-update wire format.
+    // Sentinel → 0/0/0 mapping kept consistent with BuildClientInfoJson so the
+    // server's distance/LOS math never sees out-of-bounds coords.
+    bool hasPos = (lat >= -90.0 && lat <= 90.0 &&
+                   lon >= -180.0 && lon <= 180.0 &&
+                   alt > -499.0);
+    double wireLat = hasPos ? lat : 0.0;
+    double wireLon = hasPos ? lon : 0.0;
+    double wireAlt = hasPos ? alt : 0.0;
+
+    std::ostringstream ci;
+    ci << std::fixed << std::setprecision(6);
+    ci << "{"
+       << R"("ClientGuid":")" << EscapeJsonString(m_guid) << "\","
+       << R"("Name":")"       << EscapeJsonString(name)   << "\","
+       << R"("Seat":0,)"
+       << R"("Coalition":)"   << coalition << ","
+       << R"("AllowRecord":true,)"
+       << R"("LatLngPosition":{"lat":)" << wireLat
+       << R"(,"lng":)" << wireLon
+       << R"(,"alt":)" << std::fixed << std::setprecision(1) << wireAlt
+       << "}}";
     return ci.str();
 }
 

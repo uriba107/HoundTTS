@@ -30,24 +30,6 @@ static HoundTTS::ITTSBackend* MakeBackend(const std::string& transmitter) {
 }
 
 // ---------------------------------------------------------------------------
-// GenerateSessionId — produces a short unique string ID
-// ---------------------------------------------------------------------------
-static std::string GenerateSessionId() {
-    // Thread-local RNG seeded once + atomic counter prevents duplicates on rapid calls
-    static std::atomic<uint64_t> sCounter{0};
-    thread_local std::mt19937_64 rng([] {
-        uint64_t seed = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
-        try { seed ^= std::random_device{}(); } catch (...) {}
-        return seed;
-    }());
-    uint64_t r = rng() ^ sCounter.fetch_add(1, std::memory_order_relaxed);
-    char buf[20];
-    std::snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)r);
-    return std::string(buf);
-}
-
-// ---------------------------------------------------------------------------
 // ExpandFreqs — frequency spread / leakage simulation
 //
 // Parses a comma-separated MHz string (e.g. "251.0,305.0") and for each
@@ -206,7 +188,14 @@ int l_textToSpeech(lua_State* L) {
     }
 
     // Create and register a session for this transmission
-    std::string sessionId = GenerateSessionId();
+    std::string sessionId = HoundTTS::Utils::GenerateSRSGuid();
+    if (sessionId.empty()) {
+        auto& log = HoundTTS::Logger::Instance();
+        log.Error("l_textToSpeech", "failed to generate session GUID");
+        lua_pushnil(L);
+        lua_pushstring(L, "Failed to generate session GUID");
+        return 2;
+    }
     auto session = HoundTTS::SessionManager::Instance().Register(sessionId);
 
     // Build TransmitParams from the request (pure routing — no TTS logic)
@@ -355,7 +344,14 @@ int l_startNoise(lua_State* L) {
     lua_pop(L, 1);
 
     // Register session
-    std::string sessionId = GenerateSessionId();
+    std::string sessionId = HoundTTS::Utils::GenerateSRSGuid();
+    if (sessionId.empty()) {
+        auto& log = HoundTTS::Logger::Instance();
+        log.Error("l_startNoise", "failed to generate session GUID");
+        lua_pushnil(L);
+        lua_pushstring(L, "Failed to generate session GUID");
+        return 2;
+    }
     auto session = HoundTTS::SessionManager::Instance().Register(sessionId);
 
     // Build TransmitParams
@@ -425,7 +421,14 @@ int l_startTone(lua_State* L) {
     float  volume   = static_cast<float>(GetTableNumber(L, 2, "volume", 1.0));
 
     // Register session (tone is finite — session lets caller kill early if needed)
-    std::string sessionId = GenerateSessionId();
+    std::string sessionId = HoundTTS::Utils::GenerateSRSGuid();
+    if (sessionId.empty()) {
+        auto& log = HoundTTS::Logger::Instance();
+        log.Error("l_startTone", "failed to generate session GUID");
+        lua_pushnil(L);
+        lua_pushstring(L, "Failed to generate session GUID");
+        return 2;
+    }
     auto session = HoundTTS::SessionManager::Instance().Register(sessionId);
 
     // Build TransmitParams
@@ -518,10 +521,8 @@ int l_updateSession(lua_State* L) {
         // short TCP JSON frame so holding the mutex is bounded.
         if (hasPos) {
             std::lock_guard<std::mutex> lk(posData->syncMutex);
-            if (posData->sendPositionSync) {
-                posData->positionDirty.store(true);
+            if (posData->sendPositionSync)
                 posData->sendPositionSync();
-            }
         }
     }
 
