@@ -459,7 +459,7 @@ function HoundTTS.TransmitNoise(transmission_params, provider_params)
 
     local noiseType = ep.noiseType or "white"
     local volume    = tp.volume or ep.volume or 1.0  -- prefer transmission_params
-    local duration  = ep.duration  or 0         -- <=0 means continuous
+    local duration  = ep.duration  or 600         -- <=0 means continuous
     local noiseParams = { noiseType = noiseType, volume = volume, duration = duration }
     if ep.seed then noiseParams.seed = ep.seed end
 

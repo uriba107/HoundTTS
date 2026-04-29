@@ -396,21 +396,20 @@ cache_ttl_minutes = 5         ; Cache entry TTL in minutes, 0 = no expiration (d
 
 HoundTTS includes an in-memory LRU cache for synthesized PCM audio buffers (16kHz mono). This cache reduces latency for repeated TTS requests with identical parameters (provider, message, voice, etc.). Cache entries are evicted based on least-recently-used order and optional time-to-live. Configure via the `[General]` section in `HoundTTS-credentials.ini`.
 
-### PCM Cache
-
-HoundTTS includes an in-memory LRU cache for synthesized PCM audio buffers (16kHz mono). This cache reduces latency for repeated TTS requests with identical parameters (provider, message, voice, etc.). Cache entries are evicted based on least-recently-used order and optional time-to-live. Configure via the `[General]` section in `HoundTTS-credentials.ini`.
-
-### PCM Cache
-
-HoundTTS includes an in-memory LRU cache for synthesized PCM audio buffers (16kHz mono). This cache reduces latency for repeated TTS requests with identical parameters (provider, message, voice, etc.). Cache entries are evicted based on least-recently-used order and optional time-to-live. Configure via the `[General]` section in `HoundTTS-credentials.ini`.
-
 ## Usage (in mission scripts)
 
-HoundTTS provides two APIs:
+HoundTTS exposes a **Lua API** for use within DCS mission scripts. This is the primary interface. The Lua layer wraps low-level DLL functions (`textToSpeech`, `startNoise`, `startTone`, `updateSession`, `killAllSessions`, `translateAsync`, `getTranslationResult`) and provides a mission-friendly interface with named parameter tables, async helpers, and session tracking.
 
-- **`TextToSpeech`** — drop-in replacement for STTS. Identical signature, transmits directly over SRS
-- **`Transmit`** — flexible API with named parameter tables. Supports all TTS providers, encryption, position.
-- **`Translate`** — translate text via OpenAI chat models. Preserves military aviation brevity codes.
+**Main Lua functions:**
+
+- **`Transmit`** — flexible TTS transmission with named parameters. Supports all TTS providers, encryption, position tracking.
+- **`TextToSpeech`** — drop-in STTS replacement. Identical signature for backward compatibility.
+- **`TransmitTone`** — sine-wave tone transmission (connection testing, alerts).
+- **`TransmitNoise`** — noise/jamming transmission with spectral control.
+- **`UpdateSession`** — track moving transmitters in real-time.
+- **`KillSession`** — stop a live transmission early.
+- **`TestTone`** — quick connection test (440 Hz tone).
+- **`Translate`** — async text translation (OpenAI, Google, LibreTranslate, AWS, Azure).
 
 ```lua
 -- Drop-in STTS replacement
@@ -446,6 +445,14 @@ HoundTTS.Transmit(
     { provider = "piper", voice = "en_US-lessac-low", speed = 1.1 }
 )
 
+-- Auto-track a DCS object (live position updates, auto-kill on death)
+HoundTTS.Transmit(
+    "GCI on station, contact me on this freq",
+    { freqs = "251.0", coalition = 2, name = "GCI",
+      dcsObject = Unit.getByName("GCI") },
+    { provider = "piper", voice = "en_US-lessac-low" }
+)
+
 -- Connection test (bypasses TTS entirely, sends a 440 Hz tone)
 HoundTTS.TestTone("251.0", "AM", 2)
 
@@ -461,64 +468,44 @@ HoundTTS.Translate("Bogey, BRAA 270 for 15, angels 20, hostile",
         end
     end)
 
--- Translate and transmit (async)
-HoundTTS.Translate("Two bandits, BRA 090 for 30, angels 15",
-    { language = "fr" },
-    function(msg, err)
-        if msg then
-            HoundTTS.Transmit(msg,
-                { freqs = "251.0", coalition = 2, name = "GCI" },
-                { provider = "openai", voice = "nova" })
-        end
-    end)
+-- Translate and transmit in one call (DLL-side, no DCS callback needed)
+HoundTTS.Transmit(
+    "Two bandits, BRA 090 for 30, angels 15",
+    { freqs = "251.0", coalition = 2, name = "GCI" },
+    { provider = "openai", voice = "nova" },
+    { provider = "openai", language = "fr" }  -- inline translation params
+)
 ```
 
 ### API Reference
 
----
+All functions below are **Lua API** — called from mission scripts via `HoundTTS.<function>()`. Each wraps one or more DLL functions (noted in parentheses for reference). For low-level DLL access, see the [Architecture](#architecture) section.
 
-#### `HoundTTS.TextToSpeech(message, freqs, modulations, volume, name, coalition, [point], [speed], [gender], [culture], [voice], [googleTTS], [AzureCreds])`
-
-Drop-in replacement for STTS. Transmits directly over SRS using SAPI, Google, or Azure depending on the flags passed.
-
-| Argument    | Type     | Default    | Description                           |
-| ----------- | -------- | ---------- | ------------------------------------- |
-| message     | string   | required   | Text to speak                         |
-| freqs       | string   | required   | Frequency in MHz, comma-separated     |
-| modulations | string   | required   | `AM` or `FM`, comma-separated         |
-| volume      | number   | `1.0`      | 0.0 – 1.0                             |
-| name        | string   | `HoundTTS` | Transmitter name shown in SRS         |
-| coalition   | number   | `0`        | 0=spectator, 1=red, 2=blue            |
-| point       | Vec3/nil | `nil`      | DCS position (e.g. `Unit:getPoint()`) |
-| speed       | number   | `1`        | Speech rate                           |
-| gender      | string   | `female`   | `male` / `female`                     |
-| culture     | string   | `""`       | e.g. `en-US`, `en-GB`                 |
-| voice       | string   | `""`       | Voice/model name                      |
-| googleTTS   | boolean  | `false`    | Use Google TTS credentials            |
-| AzureCreds  | string   | `nil`      | Azure TTS credentials string          |
-
-Returns: estimated speech time in seconds.
+#### Primary API
 
 ---
 
-#### `HoundTTS.Transmit(message, transmission_params, provider_params)`
+#### `HoundTTS.Transmit(message, transmission_params, provider_params, [translation_params])`
 
-Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, encryption, and future transmitter types.
+**Lua wrapper for:** `_dll.textToSpeech()` (with optional inline translation)
+
+Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, encryption, position tracking, and future transmitter types. Supports optional on-the-fly translation before TTS synthesis.
 
 **`transmission_params`** (table) — where and how to transmit:
 
-| Field       | Type     | Default             | Description                              |
-| ----------- | -------- | ------------------- | ---------------------------------------- |
-| transmitter | string   | `"srs"`             | Transmitter type. Currently only `"srs"` |
-| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated        |
-| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated            |
-| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue               |
-| name        | string   | `"HoundTTS"`        | Client name shown in SRS                 |
-| point       | Vec3/nil | `nil`               | DCS position for geo-location            |
-| encrypt     | boolean  | `false`             | Enable SRS encryption                    |
-| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS)   |
-| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                            |
-| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                          |
+| Field       | Type                  | Default             | Description                                                                                                                                                                                                                                                    |
+| ----------- | --------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| transmitter | string                | `"srs"`             | Transmitter type. Currently only `"srs"`                                                                                                                                                                                                                       |
+| freqs       | string                | `"251.0"`           | Frequency in MHz, comma-separated                                                                                                                                                                                                                              |
+| modulations | string                | `"AM"`              | `AM` or `FM`, comma-separated                                                                                                                                                                                                                                  |
+| coalition   | number                | `0`                 | 0=spectator, 1=red, 2=blue                                                                                                                                                                                                                                     |
+| name        | string                | `"HoundTTS"`        | Client name shown in SRS                                                                                                                                                                                                                                       |
+| point       | Vec3/nil              | `nil`               | DCS position for geo-location                                                                                                                                                                                                                                  |
+| dcsObject   | Unit/StaticObject/nil | `nil`               | DCS Unit or StaticObject. If `point` is not set, position is derived from this object (with vertical offset for ground/static). Session is auto-tracked: position updates while the object is alive, and the session is killed when it dies or stops existing. |
+| encrypt     | boolean               | `false`             | Enable SRS encryption                                                                                                                                                                                                                                          |
+| encKey      | number                | `0`                 | Encryption key (0–255, must match SRS)                                                                                                                                                                                                                         |
+| host        | string                | `HoundTTS.SRS_HOST` | SRS server IP                                                                                                                                                                                                                                                  |
+| port        | number                | `HoundTTS.SRS_PORT` | SRS server port                                                                                                                                                                                                                                                |
 
 **`provider_params`** (table) — which TTS provider to use:
 
@@ -532,6 +519,16 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 | gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                                                                          |
 | speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                                                                                      |
 | volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                                                                                        |
+
+**`translation_params`** (table, optional) — translate before TTS:
+
+| Field           | Type   | Default | Description                                                                                                                                                                        |
+| --------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| provider        | string | `""`    | Translation provider: `"openai"`, `"google"` (`"gcloud"`), `"libretranslate"` (`"libre"`), `"aws"` (`"polly"`), `"azure"`. Omit or empty to skip translation.                      |
+| language        | string | `"en"`  | ISO 639-1 target language code e.g. `"de"`, `"fr"`, `"ru"`, `"he"` — see [Wikipedia: List of ISO 639 language codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes) |
+| source_language | string | `"en"`  | ISO 639-1 source language code (default: `"en"`)                                                                                                                                   |
+
+When provided, the message is translated **before** being sent to the TTS engine. The entire translate → TTS → SRS pipeline runs on a background thread. On translation failure, the original (untranslated) message is spoken.
 
 **Provider routing:**
 
@@ -550,183 +547,9 @@ Returns: `speechTime` (number — estimated speech duration in seconds), `sessio
 
 ---
 
-#### `HoundTTS.TestTone([freqs], [modulations], [coalition], [duration], [volume])`
-
-Sends a sine wave tone directly over SRS, bypassing the TTS engine entirely. Use this to verify the SRS connection is working before debugging TTS issues.
-
-```lua
-HoundTTS.TestTone("251.0", "AM", 2)  -- 2-second 440 Hz tone on 251.0 MHz AM, blue coalition
-```
-
-| Argument    | Type   | Default   | Description                |
-| ----------- | ------ | --------- | -------------------------- |
-| freqs       | string | `"251.0"` | Frequency in MHz           |
-| modulations | string | `"AM"`    | `AM` or `FM`               |
-| coalition   | number | `0`       | 0=spectator, 1=red, 2=blue |
-| duration    | number | `2.0`     | Duration in seconds        |
-| volume      | number | `1.0`     | Volume level (0.0–1.0)     |
-
----
-
-#### `HoundTTS.TransmitTone(transmission_params, provider_params)`
-
-Transmits a configurable sine-wave tone over SRS. Returns a `sessionId` that can be used with `UpdateSession` (for position tracking) or `KillSession` (to stop early).
-
-```lua
--- 5-second 1000 Hz tone on 251.0 MHz AM
-local sessionId = HoundTTS.TransmitTone(
-    { freqs = "251.0", modulations = "AM", coalition = 2, name = "ATIS" },
-    { duration = 5.0, freqHz = 1000.0, volume = 0.8 }
-)
-
--- Track a moving unit
-local unit = Unit.getByName("MyUnit")
-local function trackTone(_, t)
-    if not HoundTTS.UpdateSession(sessionId, { point = unit:getPoint() }) then
-        return nil  -- tone finished or session killed
-    end
-    return t + 0.5
-end
-timer.scheduleFunction(trackTone, nil, timer.getTime() + 0.5)
-```
-
-**`transmission_params`** (table) — same as `Transmit`:
-
-| Field       | Type     | Default             | Description                            |
-| ----------- | -------- | ------------------- | -------------------------------------- |
-| transmitter | string   | `"srs"`             | Transmitter type                       |
-| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated      |
-| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated          |
-| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue             |
-| name        | string   | `"HoundTTS-Tone"`   | Client name shown in SRS               |
-| point       | Vec3/nil | `nil`               | DCS position for geo-location          |
-| encrypt     | boolean  | `false`             | Enable SRS encryption                  |
-| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS) |
-| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                          |
-| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                        |
-
-**`provider_params`** (table):
-
-| Field    | Type   | Default | Description                                           |
-| -------- | ------ | ------- | ----------------------------------------------------- |
-| duration | number | `2.0`   | Duration in seconds (hard-capped at 7200 s / 2 hours) |
-| freqHz   | number | `440.0` | Tone frequency in Hz (20–20000)                       |
-| volume   | number | `1.0`   | Output level (0.0 = silence, 1.0 = full)              |
-
-Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
-
----
-
-#### `HoundTTS.TransmitNoise(transmission_params, provider_params)`
-
-Starts a noise transmission (e.g., jamming). Runs for the specified number of seconds when `duration > 0`, or up to 2 hours (7200 s) when `duration` is 0 (the default). All noise sessions are hard-capped at 7200 s regardless of the requested duration. Returns a `sessionId` for position updates or early termination via `KillSession`.
-
-```lua
--- Start a noise jammer on 251.0 MHz FM
-local jammerId = HoundTTS.TransmitNoise(
-    { freqs = "251.0", modulations = "FM", coalition = 2, name = "Jammer" },
-    { noiseType = "jam", volume = 0.7 }
-)
-
--- Track a moving jammer platform
-local jammerUnit = Unit.getByName("JammerPlatform")
-local function trackJammer(_, t)
-    if not HoundTTS.UpdateSession(jammerId, { point = jammerUnit:getPoint() }) then
-        return nil  -- session ended
-    end
-    return t + 0.5
-end
-timer.scheduleFunction(trackJammer, nil, timer.getTime() + 0.5)
-
--- Later: stop the jammer
-HoundTTS.KillSession(jammerId)
-```
-
-**`transmission_params`** (table) — same as `Transmit`:
-
-| Field       | Type     | Default             | Description                            |
-| ----------- | -------- | ------------------- | -------------------------------------- |
-| transmitter | string   | `"srs"`             | Transmitter type                       |
-| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated      |
-| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated          |
-| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue             |
-| name        | string   | `"HoundTTS-Jammer"` | Client name shown in SRS               |
-| point       | Vec3/nil | `nil`               | DCS position for geo-location          |
-| encrypt     | boolean  | `false`             | Enable SRS encryption                  |
-| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS) |
-| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                          |
-| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                        |
-
-**`provider_params`** (table):
-
-| Field     | Type   | Default   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------- | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| noiseType | string | `"white"` | `"white"` / `"pink"` / `"chirp"` / `"harsh"` / `"jam"` — all tuned for channel jamming. `"white"`/`"pink"`: overdriven 1/f pink noise (dense, full-spectrum). `"chirp"`: noise floor + 8 fast-swept sines with overdrive. `"harsh"`: noise floor + 8 rapid square-wave oscillators with heavy overdrive (most aggressive). `"jam"`: anti-denoise + anti-AGC mode — pink noise + ultra-short oscillators (5–35 ms) + duty-cycle AM pulses + random bursts; designed to resist both the SRS client's Speex noise reduction and its incoming-audio AGC normalization. |
-| volume    | number | `1.0`     | Output level (0.0 = silence, 1.0 = full)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| duration  | number | `0`       | Duration in seconds. 0 = runs until killed (hard-capped at 7200 s / 2 hours)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| spreadKhz | number | `250`     | Total adjacent-channel spectral spread in kHz. Controls the maximum ±bandwidth around each center frequency for adjacent-channel tones and leakage. Larger values create wider spectral leakage; smaller values keep noise more tightly clustered. Must be positive to take effect and interacts with `stepKhz`, `noiseType`, `volume`, and `duration`.                                                                                                                                                                                                            |
-| stepKhz   | number | `25`      | Spacing between adjacent-channel tones in kHz. Defaults to 25 kHz standard AM spacing. Larger values place leakage farther apart, while smaller values increase channel density and overlap. Must be positive to take effect.                                                                                                                                                                                                                                                                                                                                      |
-| seed      | number | _auto_    | RNG seed for reproducible noise (optional)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-
-Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
-
----
-
-#### `HoundTTS.UpdateSession(sessionId, update_params)`
-
-Updates the position of a live transmission (TTS, tone, or noise). It can be called frequently (e.g., every 0.5s from a scheduler) to track a moving unit.
-
-```lua
-local sessionId = HoundTTS.TransmitNoise(...)
-
--- Track a moving unit
-local unit = Unit.getByName("JammerPlatform")
-local function trackPosition(_, t)
-    if not HoundTTS.UpdateSession(sessionId, { point = unit:getPoint() }) then
-        return nil  -- session ended (transmission finished or killed)
-    end
-    return t + 0.5  -- check again in 0.5 seconds
-end
-timer.scheduleFunction(trackPosition, nil, timer.getTime() + 0.5)
-```
-
-| Argument      | Type   | Description                                                           |
-| ------------- | ------ | --------------------------------------------------------------------- |
-| sessionId     | string | Session ID returned by `Transmit`, `TransmitTone`, or `TransmitNoise` |
-| update_params | table  | Position update parameters (see below)                                |
-
-**`update_params`** (table):
-
-| Field | Type   | Description                                                 |
-| ----- | ------ | ----------------------------------------------------------- |
-| point | Vec3   | DCS position (e.g., `Unit:getPoint()`)                      |
-| lat   | number | Explicit latitude (overrides point-derived value)           |
-| lon   | number | Explicit longitude (overrides point-derived value)          |
-| alt   | number | Explicit altitude in meters (overrides point-derived value) |
-
-Returns: `true` if the session is still alive, `false` if the session was found but has ended, and `nil` if the session was not found. The Lua wrapper converts `point` into explicit `lat`/`lon`/`alt` values before calling the native binding `HoundTTS.updateSession`, so the session lookup and return semantics are dictated by the native binding implementation. Use this return value to break out of position-update loops.
-
----
-
-#### `HoundTTS.KillSession(sessionId)`
-
-Stops a live transmission (TTS, tone, or noise) identified by `sessionId`. For noise jammers this terminates the transmission immediately.
-
-```lua
-local sessionId = HoundTTS.TransmitNoise(...)
--- ... later ...
-HoundTTS.KillSession(sessionId)
-```
-
-| Argument  | Type   | Description                                                           |
-| --------- | ------ | --------------------------------------------------------------------- |
-| sessionId | string | Session ID returned by `Transmit`, `TransmitTone`, or `TransmitNoise` |
-
-Returns: `true` if the session was found and killed, `false` otherwise.
-
----
-
 #### `HoundTTS.Translate(message, provider_params, callback)`
+
+**Lua wrapper for:** `_dll.translateAsync()` + `_dll.getTranslationResult()` (with polling)
 
 Translates text asynchronously. **Async** — returns immediately, the callback fires when the translation is ready. Designed for military aviation context — standard brevity codes (FOX 1/2/3, BULLSEYE, BRAA, WINCHESTER, etc.) are preserved in their original form (OpenAI provider only).
 
@@ -777,14 +600,258 @@ api_key  =                        ; leave blank for instances that don't require
 
 ---
 
+#### `HoundTTS.TransmitNoise(transmission_params, provider_params)`
+
+**Lua wrapper for:** `_dll.startNoise()`
+
+Starts a noise transmission (e.g., jamming). Runs for the specified number of seconds when `duration > 0`, or up to 2 hours (7200 s) when `duration` is 0 (the default). All noise sessions are hard-capped at 7200 s regardless of the requested duration. Returns a `sessionId` for position updates or early termination via `KillSession`.
+
+**Noise types demo:** [YouTube Short showing white/pink/chirp/harsh/jam modes](https://www.youtube.com/watch?v=UlYN0XQoAgg)
+
+```lua
+-- Start a noise jammer on 251.0 MHz FM
+local jammerId = HoundTTS.TransmitNoise(
+    { freqs = "251.0", modulations = "FM", coalition = 2, name = "Jammer" },
+    { noiseType = "jam", volume = 0.7 }
+)
+
+-- Track a moving jammer platform
+local jammerUnit = Unit.getByName("JammerPlatform")
+local function trackJammer(_, t)
+    if not HoundTTS.UpdateSession(jammerId, { point = jammerUnit:getPoint() }) then
+        return nil  -- session ended
+    end
+    return t + 0.5
+end
+timer.scheduleFunction(trackJammer, nil, timer.getTime() + 0.5)
+
+-- Later: stop the jammer
+HoundTTS.KillSession(jammerId)
+```
+
+**`transmission_params`** (table) — same as `Transmit`:
+
+| Field       | Type     | Default             | Description                            |
+| ----------- | -------- | ------------------- | -------------------------------------- |
+| transmitter | string   | `"srs"`             | Transmitter type                       |
+| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated      |
+| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated          |
+| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue             |
+| name        | string   | `"HoundTTS-Jammer"` | Client name shown in SRS               |
+| point       | Vec3/nil | `nil`               | DCS position for geo-location          |
+| encrypt     | boolean  | `false`             | Enable SRS encryption                  |
+| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS) |
+| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                          |
+| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                        |
+
+**`provider_params`** (table):
+
+| Field     | Type   | Default   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------- | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --- |
+| noiseType | string | `"white"` | `"white"` / `"pink"` (aliases — same overdriven 1/f pink noise, dense full-spectrum) / `"chirp"` / `"harsh"` / `"jam"` — all tuned for channel jamming. `"chirp"`: noise floor + 8 fast-swept sines with overdrive. `"harsh"`: noise floor + 8 rapid square-wave oscillators with heavy overdrive (most aggressive). `"jam"`: anti-denoise + anti-AGC mode — pink noise + ultra-short oscillators (5–35 ms) + duty-cycle AM pulses + random bursts; designed to resist both the SRS client's Speex noise reduction and its incoming-audio AGC normalization. |
+| volume    | number | `1.0`     | Output level (0.0 = silence, 1.0 = full)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| duration  | number | `600`     | Duration in seconds (default: 600 = 10 minutes). 0 = runs until killed (hard-capped at 7200 s / 2 hours)                                                                                                                                                                                                                                                                                                                                                                                                                                                     |     |
+| spreadKhz | number | `250`     | Total adjacent-channel spectral spread in kHz. Controls the maximum ±bandwidth around each center frequency for adjacent-channel tones and leakage. Larger values create wider spectral leakage; smaller values keep noise more tightly clustered. Must be positive to take effect and interacts with `stepKhz`, `noiseType`, `volume`, and `duration`.                                                                                                                                                                                                      |
+| stepKhz   | number | `25`      | Spacing between adjacent-channel tones in kHz. Defaults to 25 kHz standard AM spacing. Larger values place leakage farther apart, while smaller values increase channel density and overlap. Must be positive to take effect.                                                                                                                                                                                                                                                                                                                                |
+| seed      | number | _auto_    | RNG seed for reproducible noise (optional)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
+
+---
+
+#### `HoundTTS.TransmitTone(transmission_params, provider_params)`
+
+**Lua wrapper for:** `_dll.startTone()`
+
+Transmits a configurable sine-wave tone over SRS. Returns a `sessionId` that can be used with `UpdateSession` (for position tracking) or `KillSession` (to stop early).
+
+```lua
+-- 5-second 1000 Hz tone on 251.0 MHz AM
+local sessionId = HoundTTS.TransmitTone(
+    { freqs = "251.0", modulations = "AM", coalition = 2, name = "ATIS" },
+    { duration = 5.0, freqHz = 1000.0, volume = 0.8 }
+)
+
+-- Track a moving unit
+local unit = Unit.getByName("MyUnit")
+local function trackTone(_, t)
+    if not HoundTTS.UpdateSession(sessionId, { point = unit:getPoint() }) then
+        return nil  -- tone finished or session killed
+    end
+    return t + 0.5
+end
+timer.scheduleFunction(trackTone, nil, timer.getTime() + 0.5)
+```
+
+**`transmission_params`** (table) — same as `Transmit`:
+
+| Field       | Type     | Default             | Description                            |
+| ----------- | -------- | ------------------- | -------------------------------------- |
+| transmitter | string   | `"srs"`             | Transmitter type                       |
+| freqs       | string   | `"251.0"`           | Frequency in MHz, comma-separated      |
+| modulations | string   | `"AM"`              | `AM` or `FM`, comma-separated          |
+| coalition   | number   | `0`                 | 0=spectator, 1=red, 2=blue             |
+| name        | string   | `"HoundTTS-Tone"`   | Client name shown in SRS               |
+| point       | Vec3/nil | `nil`               | DCS position for geo-location          |
+| encrypt     | boolean  | `false`             | Enable SRS encryption                  |
+| encKey      | number   | `0`                 | Encryption key (0–255, must match SRS) |
+| host        | string   | `HoundTTS.SRS_HOST` | SRS server IP                          |
+| port        | number   | `HoundTTS.SRS_PORT` | SRS server port                        |
+
+**`provider_params`** (table):
+
+| Field    | Type   | Default | Description                                           |
+| -------- | ------ | ------- | ----------------------------------------------------- |
+| duration | number | `2.0`   | Duration in seconds (hard-capped at 7200 s / 2 hours) |
+| freqHz   | number | `440.0` | Tone frequency in Hz (20–20000)                       |
+| volume   | number | `1.0`   | Output level (0.0 = silence, 1.0 = full)              |
+
+Returns: `sessionId` string for use with `UpdateSession` / `KillSession`.
+
+#### Compatibility & Utility
+
+---
+
+#### `HoundTTS.TextToSpeech(message, freqs, modulations, volume, name, coalition, [point], [speed], [gender], [culture], [voice], [googleTTS], [AzureCreds])`
+
+**Lua wrapper for:** `_dll.textToSpeech()`
+
+Drop-in replacement for STTS. Transmits directly over SRS using SAPI, Google, or Azure depending on the flags passed.
+
+| Argument    | Type     | Default    | Description                           |
+| ----------- | -------- | ---------- | ------------------------------------- |
+| message     | string   | required   | Text to speak                         |
+| freqs       | string   | required   | Frequency in MHz, comma-separated     |
+| modulations | string   | required   | `AM` or `FM`, comma-separated         |
+| volume      | number   | `1.0`      | 0.0 – 1.0                             |
+| name        | string   | `HoundTTS` | Transmitter name shown in SRS         |
+| coalition   | number   | `0`        | 0=spectator, 1=red, 2=blue            |
+| point       | Vec3/nil | `nil`      | DCS position (e.g. `Unit:getPoint()`) |
+| speed       | number   | `1`        | Speech rate                           |
+| gender      | string   | `female`   | `male` / `female`                     |
+| culture     | string   | `""`       | e.g. `en-US`, `en-GB`                 |
+| voice       | string   | `""`       | Voice/model name                      |
+| googleTTS   | boolean  | `false`    | Use Google TTS credentials            |
+| AzureCreds  | string   | `nil`      | Azure TTS credentials string          |
+
+Returns: estimated speech time in seconds.
+
+---
+
 #### `HoundTTS.getSpeechTime(length, [speed], [googleTTS])`
+
+**Lua wrapper for:** `_dll.getSpeechTime()`
 
 Returns estimated speech duration in seconds. `length` can be a number (character count) or a string (measured automatically).
 
+---
+
+#### `HoundTTS.TestTone([freqs], [modulations], [coalition], [duration], [volume])`
+
+**Lua wrapper for:** `_dll.startTone()`
+
+Sends a sine wave tone directly over SRS, bypassing the TTS engine entirely. Use this to verify the SRS connection is working before debugging TTS issues.
+
+```lua
+HoundTTS.TestTone("251.0", "AM", 2)  -- 2-second 440 Hz tone on 251.0 MHz AM, blue coalition
+```
+
+| Argument    | Type   | Default   | Description                |
+| ----------- | ------ | --------- | -------------------------- |
+| freqs       | string | `"251.0"` | Frequency in MHz           |
+| modulations | string | `"AM"`    | `AM` or `FM`               |
+| coalition   | number | `0`       | 0=spectator, 1=red, 2=blue |
+| duration    | number | `2.0`     | Duration in seconds        |
+| volume      | number | `1.0`     | Volume level (0.0–1.0)     |
+
+#### Advanced (Manual Session Control)
+
+---
+
+#### `HoundTTS.UpdateSession(sessionId, update_params)`
+
+**Lua wrapper for:** `_dll.updateSession()`
+
+Updates the position of a live transmission (TTS, tone, or noise). It can be called frequently (e.g., every 0.5s from a scheduler) to track a moving unit.
+
+```lua
+local sessionId = HoundTTS.TransmitNoise(...)
+
+-- Track a moving unit
+local unit = Unit.getByName("JammerPlatform")
+local function trackPosition(_, t)
+    if not HoundTTS.UpdateSession(sessionId, { point = unit:getPoint() }) then
+        return nil  -- session ended (transmission finished or killed)
+    end
+    return t + 0.5  -- check again in 0.5 seconds
+end
+timer.scheduleFunction(trackPosition, nil, timer.getTime() + 0.5)
+```
+
+| Argument      | Type   | Description                                                           |
+| ------------- | ------ | --------------------------------------------------------------------- |
+| sessionId     | string | Session ID returned by `Transmit`, `TransmitTone`, or `TransmitNoise` |
+| update_params | table  | Position update parameters (see below)                                |
+
+**`update_params`** (table):
+
+| Field | Type   | Description                                                 |
+| ----- | ------ | ----------------------------------------------------------- |
+| point | Vec3   | DCS position (e.g., `Unit:getPoint()`)                      |
+| lat   | number | Explicit latitude (overrides point-derived value)           |
+| lon   | number | Explicit longitude (overrides point-derived value)          |
+| alt   | number | Explicit altitude in meters (overrides point-derived value) |
+
+Returns: `true` if the session is still alive, `false` if the session was found but has ended, and `nil` if the session was not found. The Lua wrapper converts `point` into explicit `lat`/`lon`/`alt` values before calling the native binding `HoundTTS.updateSession`, so the session lookup and return semantics are dictated by the native binding implementation. Use this return value to break out of position-update loops.
+
+---
+
+#### `HoundTTS.KillSession(sessionId)`
+
+**Lua wrapper for:** `_dll.updateSession()` (with `alive=false` flag)
+
+Stops a live transmission (TTS, tone, or noise) identified by `sessionId`. For noise jammers this terminates the transmission immediately.
+
+```lua
+local sessionId = HoundTTS.TransmitNoise(...)
+-- ... later ...
+HoundTTS.KillSession(sessionId)
+```
+
+| Argument  | Type   | Description                                                           |
+| --------- | ------ | --------------------------------------------------------------------- |
+| sessionId | string | Session ID returned by `Transmit`, `TransmitTone`, or `TransmitNoise` |
+
+Returns: `true` if the session was found and killed, `false` otherwise.
+
 ## Architecture
 
-Same pattern as [DCS-gRPC](https://github.com/DCS-gRPC/rust-server): load the DLL
-**before** DCS sanitizes the mission scripting environment.
+### Lua API Layer
+
+The **Lua API** (all `HoundTTS.*` functions) is the primary interface for mission scripts. It is defined in `HoundTTS-mission.lua` and wraps the low-level DLL functions. The Lua layer provides:
+
+- Named parameter tables (instead of positional args)
+- Async helpers (translation polling, session tracking)
+- Coordinate conversion (`point` → `lat`/`lon`/`alt`)
+- Auto-tracking of DCS objects (position updates on death/existence)
+
+### DLL Layer
+
+The **DLL** (`HoundTTS.dll`) exports low-level Lua C bindings:
+
+- `textToSpeech()` — TTS synthesis and transmission
+- `startNoise()` — noise/jamming transmission
+- `startTone()` — tone transmission
+- `updateSession()` — position updates and kill signals
+- `killAllSessions()` — stop all transmissions
+- `translateAsync()` / `getTranslationResult()` — async translation
+- `getSpeechTime()` — speech duration estimation
+- `clearPCMCache()` / `getCacheStats()` — cache management
+- `init()` — initialization (called once at load)
+
+### Loading Pattern
+
+Same pattern as [DCS-gRPC](https://github.com/DCS-gRPC/rust-server): load the DLL **before** DCS sanitizes the mission scripting environment.
 
 ```
 MissionScripting.lua
@@ -794,13 +861,16 @@ MissionScripting.lua
 │       │
 │       ├─ require("HoundTTS")   ← loads HoundTTS.dll (pre-sanitization)
 │       ├─ reads optional Config\HoundTTS.lua
-│       └─ defines HoundTTS.TextToSpeech / Transmit / TransmitTone / TransmitNoise / UpdateSession / KillSession / TestTone / Translate / getSpeechTime / round
+│       └─ defines Lua API: Transmit, TextToSpeech, TransmitTone, TransmitNoise,
+│           UpdateSession, KillSession, TestTone, Translate, getSpeechTime
 │
 └─ sanitizeModule('os','io','lfs') + remove require/package
        ↓
-   Mission scripts call HoundTTS.TextToSpeech() normally
+   Mission scripts call HoundTTS.Transmit() etc. normally
    (DLL reference captured in upvalue before sanitization)
 ```
+
+**Key points:**
 
 - DLL is loaded directly in the **mission Lua state** before sanitization
 - `_dll` reference is captured as a local upvalue — survives sanitization
@@ -901,21 +971,26 @@ All keys inside the section (`access_key`, `secret_key`, `region`, `engine`) are
 
 ## Building
 
-### Docker (recommended)
+### Windows (Docker-based, recommended)
 
-A pipeline is available, invoked via the PowerShell script:
+The primary build entry point is `build.bat`:
 
-#### Windows containers (MSVC — full feature set including SAPI)
-
-Requires Docker Desktop in **Windows containers** mode.
-
-```powershell
-.\build-docker.ps1
+```bat
+build.bat
 ```
 
-Builds with MSVC + Windows 10 SDK (19041) inside a Windows Server Core container. All providers, including SAPI 5.4, are available.
+This batch file wrapper:
 
-The pipeline produces the following `dist\` layout:
+- Validates Docker is installed and the daemon is running
+- Invokes `build-docker.ps1` with execution policy bypass (no manual PowerShell configuration needed)
+- Displays build elapsed time
+- Preserves the build exit code
+
+**Requirements:** Docker Desktop must be running in **Windows containers** mode.
+
+**What it builds:** MSVC + Windows 10 SDK (19041) inside a Windows Server Core container. All providers are available, including SAPI 5.4.
+
+**Output layout:**
 
 ```
 dist\
@@ -924,13 +999,11 @@ dist\
 └── piper-voices\  ← Bundled voice models (~120 MB, or bring your own)
 ```
 
-### Windows (native, no Docker)
+**Alternative:** invoke the PowerShell script directly if you prefer:
 
-```bat
-build.bat
+```powershell
+.\build-docker.ps1
 ```
-
-Auto-detects MinGW or MSVC CLI, generates the import library from `lua.dll`, builds the DLL, and copies everything to `dist\`.
 
 ## License
 
@@ -940,9 +1013,13 @@ The **piper-engine** package (`HoundTTS-piper-engine-windows.zip`) contains `pip
 
 ## Acknowledgements
 
+Special thanks to:
+
+- **[@Applevangelist](https://github.com/Applevangelist)** — for adopting HoundTTS into [MOOSE](https://github.com/FlightControl-Master/MOOSE) and for providing much-needed guidance.
+- **[@SpecialK](https://github.com/karel26)** — for integrating HoundTTS installation into [DCSServerBot](https://github.com/Special-K-s-Flightsim-Bots/DCSServerBot).
+
 HoundTTS builds on the work of several open-source projects:
 
 - **[DCS-SimpleRadioStandalone (SRS)](https://github.com/ciribob/DCS-SimpleRadioStandalone)** — the SRS TCP/UDP protocol, packet framing, and audio pipeline were studied and adapted to implement the native SRS client in this project.
-- **[SkyEye](https://github.com/dharmab/skyeye)** — SkyEye's Go implementation of the SRS client and Opus audio pipeline served as a reference for the direct SRS integration approach used here.
+- **[SkyEye](https://github.com/dharmab/skyeye)** — SkyEye's Go implementation of the SRS client and Opus audio pipeline served as a reference for the direct SRS integration approach in this project.
 - **[DCS-gRPC](https://github.com/DCS-gRPC/rust-server)** — the pattern of loading a native DLL into the DCS mission Lua state before sanitization (via `MissionScripting.lua`) was pioneered by DCS-gRPC and is followed here.
-- **[@Applevangelist](https://github.com/Applevangelist)** — for adopting HoundTTS into [MOOSE](https://github.com/FlightControl-Master/MOOSE) and providing much needed guidance.
