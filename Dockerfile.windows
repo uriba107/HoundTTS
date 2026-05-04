@@ -26,13 +26,11 @@ ARG CMAKE_VERSION=4.3.2
 ARG GIT_VERSION=2.54.0
 ARG WGET_VERSION=1.21.4
 ARG UNZIP_VERSION=6.0
-ARG STRAWBERRYPERL_VERSION=5.38.2.2
 
 RUN choco install -y cmake --version %CMAKE_VERSION% --installargs "ADD_CMAKE_TO_PATH=System" && \
     choco install -y git --version %GIT_VERSION% && \
     choco install -y wget --version %WGET_VERSION% && \
-    choco install -y unzip --version %UNZIP_VERSION% && \
-    choco install -y strawberryperl --version %STRAWBERRYPERL_VERSION%
+    choco install -y unzip --version %UNZIP_VERSION% 
 
 # Visual Studio 2022 Build Tools — MSVC v143 + Windows 10 SDK 19041 (sapi.h, sphelper.h, COM headers)
 # Split into two layers to avoid hcsshim ImportLayer failure on large single layers
@@ -56,6 +54,9 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      Invoke-WebRequest -Uri $url -OutFile $zip; \
      Expand-Archive -Path $zip -DestinationPath 'C:\BuildTools\bin' -Force; \
      Remove-Item $zip"
+RUN powershell -NoProfile -Command \
+    "$mp = [Environment]::GetEnvironmentVariable('PATH','Machine'); \
+     [Environment]::SetEnvironmentVariable('PATH', $mp + ';C:\BuildTools\bin', 'Machine')"
 
 # vcpkg — classic mode install (no vcpkg.json manifest; version pinned via VCPKG_TAG)
 # Install packages — versions determined by the pinned vcpkg tag's built-in baseline
