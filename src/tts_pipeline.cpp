@@ -56,12 +56,18 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         }
     }
 
-    // --- Cache miss: wrap queue with CachingPCMQueue to capture output ---
+    // --- Cache miss: wrap queue with CachingPCMQueue to capture output,
+    // then PaddedPCMQueue to inject 200ms silence before/after speech.
+    // Chain: Provider → PaddedPCMQueue → CachingPCMQueue → PCMQueue.
+    // effectiveQueue is kept for error/abort paths (bypass padding).
+    // On cache hit the padded PCM replays directly — no double-padding.
     std::shared_ptr<PCMQueue> effectiveQueue = queue;
+    std::shared_ptr<PCMQueue> dispatchQueue  = queue;
     std::shared_ptr<CachingPCMQueue> cachingQueue;
     if (cacheable) {
         cachingQueue = std::make_shared<CachingPCMQueue>(queue, cacheKey);
         effectiveQueue = cachingQueue;
+        dispatchQueue  = std::make_shared<PaddedPCMQueue>(effectiveQueue);
     }
 
     // Helper: committed only when a caching wrapper is in use. Providers
@@ -234,28 +240,28 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         }
 
         // Streaming: detach synthesis thread so consumer can start immediately
-        std::thread([message, piperModel, piperPath, speaker, speed, volume, effectiveQueue, finalizeCache]() {
-            bool ok = PiperTTS::SynthesizeToQueue(message, piperModel, piperPath, speaker, speed, volume, *effectiveQueue);
+        std::thread([message, piperModel, piperPath, speaker, speed, volume, dispatchQueue, finalizeCache]() {
+            bool ok = PiperTTS::SynthesizeToQueue(message, piperModel, piperPath, speaker, speed, volume, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 
     } else if (provider == TtsProvider::Azure) {
-        std::thread([message, azureKey, azureRegion, voice, culture, gender, speed, volume, effectiveQueue, finalizeCache]() {
+        std::thread([message, azureKey, azureRegion, voice, culture, gender, speed, volume, dispatchQueue, finalizeCache]() {
             bool ok = AzureTTS::SynthesizeToQueue(message, azureKey, azureRegion,
-                                                  voice, culture, gender, speed, volume, *effectiveQueue);
+                                                  voice, culture, gender, speed, volume, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 
     } else if (provider == TtsProvider::Google) {
         // Single-shot REST — runs inline; queue->MarkDone() called inside
         bool ok = GoogleTTS::SynthesizeToQueue(message, googleCreds,
-                                               voice, culture, gender, speed, volume, *effectiveQueue);
+                                               voice, culture, gender, speed, volume, *dispatchQueue);
         finalizeCache(ok);
 
     } else if (provider == TtsProvider::ElevenLabs) {
-        std::thread([message, elevenLabsKey, elevenLabsModel, voice, speed, volume, effectiveQueue, finalizeCache]() {
+        std::thread([message, elevenLabsKey, elevenLabsModel, voice, speed, volume, dispatchQueue, finalizeCache]() {
             bool ok = ElevenLabsTTS::SynthesizeToQueue(message, elevenLabsKey,
-                                                       elevenLabsModel, voice, speed, volume, *effectiveQueue);
+                                                       elevenLabsModel, voice, speed, volume, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 
@@ -263,7 +269,7 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         // Single-shot REST — runs inline
         bool ok = AwsTTS::SynthesizeToQueue(message, awsAccessKey, awsSecretKey,
                                             awsRegion, voice, awsPollyEngine,
-                                            culture, gender, speed, volume, *effectiveQueue);
+                                            culture, gender, speed, volume, *dispatchQueue);
         finalizeCache(ok);
 
     } else if (provider == TtsProvider::KittenTTS) {
@@ -272,16 +278,16 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
              "Use provider=\"openai\" with your Kitten TTS Server URL as [OpenAI] endpoint "
              "and model=kitten-tts. See README for migration instructions.");
         double kittenSpeed = (speed <= 0.0) ? 1.1 : speed;
-        std::thread([message, kittenEndpoint, voice, kittenSpeed, volume, effectiveQueue, finalizeCache]() {
+        std::thread([message, kittenEndpoint, voice, kittenSpeed, volume, dispatchQueue, finalizeCache]() {
             bool ok = OpenAITTS::SynthesizeToQueue(message, kittenEndpoint, "",
-                                                   "kitten-tts", voice, kittenSpeed, volume, *effectiveQueue);
+                                                   "kitten-tts", voice, kittenSpeed, volume, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 
     } else if (provider == TtsProvider::OpenAI) {
-        std::thread([message, openaiEndpoint, openaiKey, openaiModel, voice, speed, volume, effectiveQueue, finalizeCache]() {
+        std::thread([message, openaiEndpoint, openaiKey, openaiModel, voice, speed, volume, dispatchQueue, finalizeCache]() {
             bool ok = OpenAITTS::SynthesizeToQueue(message, openaiEndpoint, openaiKey,
-                                                   openaiModel, voice, speed, volume, *effectiveQueue);
+                                                   openaiModel, voice, speed, volume, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 
@@ -294,8 +300,8 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             message, voice, gender, culture, speed, volume);
         bool ok = !pcm.empty();
         if (ok)
-            effectiveQueue->Push(std::move(pcm));
-        effectiveQueue->MarkDone();
+            dispatchQueue->Push(std::move(pcm));
+        dispatchQueue->MarkDone();
         finalizeCache(ok);
     }
 }

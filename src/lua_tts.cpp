@@ -239,7 +239,8 @@ int l_textToSpeech(lua_State* L) {
         if (speed <= -999.0)
             speed = (provider == HoundTTS::TtsProvider::Sapi) ? 0.0 : 1.0;
         speechTime = HoundTTS::GetSpeechTime(
-            static_cast<int>(req.message.size()), speed, provider);
+            static_cast<int>(req.message.size()), speed, provider)
+            + 2 * HoundTTS::PTT_PAD_SEC; // silence padding before + after speech
     }
 
     lua_pushnumber(L, speechTime);
