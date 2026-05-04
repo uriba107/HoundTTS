@@ -219,7 +219,7 @@ end
 --   .port         number  SRS port override
 --
 -- provider_params (table):
---   .provider     "piper" | "azure" | "google" | "elevenlabs" | "aws" | "polly" | "sapi" | "openai" | "kitten"/"kittentts" (deprecated — use "openai")
+--   .provider     "piper" | "azure" | "google" | "elevenlabs" | "aws" | "polly" | "sapi" | "openai"
 --   .voice        string  Piper model name OR ElevenLabs/Azure/Google/Polly voice ID
 --   .speaker      string  Piper speaker name or integer ID (multi-speaker models only)
 --   .culture      string  e.g. "en-US"
