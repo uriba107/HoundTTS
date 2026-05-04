@@ -9,6 +9,8 @@
 #include <condition_variable>
 #include <chrono>
 #include <cstdint>
+#include <atomic>
+#include <memory>
 
 namespace HoundTTS {
 
@@ -71,6 +73,43 @@ private:
     std::mutex                       m_mutex;
     std::condition_variable          m_cv;
     bool                             m_done;
+};
+
+// Silence padding: adjust PTT_PAD_SEC to change lead-in / tail globally.
+constexpr double PTT_PAD_SEC     = 0.2;
+constexpr int    PTT_PAD_SAMPLES = static_cast<int>(PTT_PAD_SEC * 16000);
+
+// ---------------------------------------------------------------------------
+// PaddedPCMQueue — wrapper that injects silence before and after the real
+// audio to simulate a PTT lead-in / tail.  The downstream queue (and any
+// CachingPCMQueue above it) sees the silence as regular PCM, so cached
+// entries include the padding.
+// ---------------------------------------------------------------------------
+class PaddedPCMQueue : public PCMQueue {
+public:
+    PaddedPCMQueue(std::shared_ptr<PCMQueue> downstream, int padSamples = PTT_PAD_SAMPLES)
+        : downstream_(std::move(downstream)), padSamples_(padSamples) {}
+
+    void Push(std::vector<int16_t> chunk) override {
+        if (!leadInSent_.exchange(true))
+            downstream_->Push(std::vector<int16_t>(padSamples_, 0));
+        downstream_->Push(std::move(chunk));
+    }
+
+    void MarkDone() override {
+        if (!doneSent_.exchange(true)) {
+            if (leadInSent_.load())
+                downstream_->Push(std::vector<int16_t>(padSamples_, 0));
+            downstream_->MarkDone();
+        }
+        PCMQueue::MarkDone();
+    }
+
+private:
+    std::shared_ptr<PCMQueue> downstream_;
+    int padSamples_;
+    std::atomic<bool> leadInSent_{false};
+    std::atomic<bool> doneSent_{false};
 };
 
 } // namespace HoundTTS
