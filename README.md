@@ -990,6 +990,21 @@ dist\
 ├── piper-engine\  ← Piper TTS engine (~16 MB, install for Piper TTS)
 └── piper-voices\  ← Bundled voice models (~120 MB, or bring your own)
 ```
+**Troubleshooting**
+
+If you encounter the following error during the build process:
+
+```text
+re-exec error: exit status 1: output: hcsshim::ImportLayer failed in Win32: The system cannot find the path specified. (0x3)
+```
+
+This is typically caused by Windows path length limitations. To resolve this, enable long paths:
+
+1. Run the following command in **PowerShell (as Administrator)**:
+   ```PowerShell
+   Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+   ```
+2. **Restart Docker Desktop** for the changes to take effect.
 
 **Alternative:** invoke the PowerShell script directly if you prefer:
 
