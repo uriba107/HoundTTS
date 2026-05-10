@@ -37,6 +37,7 @@ static const luaL_Reg HoundTTS_funcs[] = {
     { "translateAsync",       l_translateAsync      },
     { "getTranslationResult", l_getTranslationResult},
     { "clearPCMCache",        l_clearPCMCache       },
+    { "onMissionEnd",         l_onMissionEnd        },
     { "getCacheStats",        l_getCacheStats       },
     { nullptr, nullptr }
 };

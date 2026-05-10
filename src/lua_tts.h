@@ -10,4 +10,5 @@ int l_startTone(lua_State* L);
 int l_updateSession(lua_State* L);
 int l_killAllSessions(lua_State* L);
 int l_clearPCMCache(lua_State* L);
+int l_onMissionEnd(lua_State* L);
 int l_getCacheStats(lua_State* L);

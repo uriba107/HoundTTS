@@ -18,6 +18,8 @@
 #include <set>
 #include <cmath>
 #include <vector>
+
+#include <objbase.h>
 #include <functional>
 #include <mutex>
 
@@ -565,6 +567,25 @@ int l_killAllSessions(lua_State* L) {
 int l_clearPCMCache(lua_State* L) {
     (void)L;
     HoundTTS::PCMCache::Instance().Clear();
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// HoundTTS.onMissionEnd() → nil
+//
+// Mission-end cleanup: clears PCM cache and asks COM to unload idle in-process
+// server DLLs (e.g. MSTTSEngine_OneCore.dll) so the next mission starts clean.
+// ---------------------------------------------------------------------------
+int l_onMissionEnd(lua_State* L) {
+    (void)L;
+    HoundTTS::PCMCache::Instance().Clear();
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE) {
+        CoFreeUnusedLibrariesEx(0, 0);
+    }
+    if (SUCCEEDED(hr)) {
+        CoUninitialize();
+    }
     return 0;
 }
 

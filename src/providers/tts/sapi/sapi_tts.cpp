@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <objbase.h>
+#include <initguid.h>
 #include <sapi.h>
 // sphelper.h is intentionally NOT included — it unconditionally pulls in
 // atlbase.h which is absent from the VS Build Tools VCTools-only install.
@@ -202,7 +203,10 @@ std::vector<int16_t> SapiTTS::Synthesize(
         GlobalUnlock(hg);
     } while (false);
 
-    if (coInited) CoUninitialize();
+    if (coInited) {
+        CoFreeUnusedLibrariesEx(0, 0);
+        CoUninitialize();
+    }
     return result;
 }
 
