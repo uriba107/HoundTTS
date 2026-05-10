@@ -45,23 +45,19 @@ function houndtts_hooks.onMissionLoadEnd()
 end
 
 function houndtts_hooks.onSimulationStop()
-    -- Flush PCM cache when returning to UI (mission end / restart).
-    -- The mission-side HoundTTS global (populated by HoundTTS-mission.lua via
-    -- luaopen_HoundTTS) owns clearPCMCache. This hook runs in the GUI hook
-    -- Lua state where HoundTTS is nil, so dispatch into the mission state.
+    -- Mission-end cleanup: clear PCM cache + release idle COM DLLs
+    -- (e.g. MSTTSEngine_OneCore.dll) so the next mission starts clean.
+    -- Dispatched into the mission Lua state where the DLL functions live.
     local cmd = [[
-        if HoundTTS and type(HoundTTS.clearPCMCache) == "function" then
-            HoundTTS.clearPCMCache()
-            env.info("[HoundTTS] PCM cache cleared on mission end")
-        else
-            env.error("[HoundTTS] clearPCMCache unavailable on mission stop "..
-                "(HoundTTS="..tostring(HoundTTS)..")")
+        if HoundTTS and type(HoundTTS.onMissionEnd) == "function" then
+            HoundTTS.onMissionEnd()
+            env.info("[HoundTTS] mission-end cleanup complete")
         end
     ]]
     local ok, err = pcall(net.dostring_in, "mission", cmd)
     if not ok then
         log.write("HoundTTS", log.ERROR,
-            "Failed to dispatch PCM cache flush: " .. tostring(err))
+            "Failed to dispatch mission-end cleanup: " .. tostring(err))
     end
 end
 

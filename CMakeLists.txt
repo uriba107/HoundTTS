@@ -148,10 +148,12 @@ target_link_libraries(HoundTTS PRIVATE
     crypt32
 )
 
-# MSVC: additional libs needed for SAPI COM and static OpenSSL
+# MSVC: additional libs needed for static OpenSSL and Win32 API
 if(MSVC)
     target_link_libraries(HoundTTS PRIVATE
-        sapi          # SAPI 5.4 — present in Windows 11 SDK
+        # sapi removed — SAPI is accessed purely via COM (CoCreateInstance),
+        # no import-lib symbols needed. Avoids loading MSTTSEngine_OneCore.dll
+        # at DLL load time for users who never call SAPI.
         user32
         gdi32
         bcrypt        # required by OpenSSL static on Windows

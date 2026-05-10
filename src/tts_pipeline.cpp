@@ -37,6 +37,7 @@ static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
 // suppressed at LEVEL_ERROR. The "[WARNING]" prefix keeps them distinguishable
 // from true errors in the log.
 static void LogW(const std::string& msg) { Logger::Instance().Error(kTag, "[WARNING] " + msg); }
+static void LogD(const std::string& msg) { Logger::Instance().Debug(kTag, msg); }
 
 void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue) {
     // --- PCM cache: check for hit before any work ---
@@ -294,8 +295,18 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
     } else if (message == "__test_tone__") {
         GenerateTone(queue, nullptr, 2.0, 440.0f, static_cast<float>(volume));
 
+    } else if (provider == TtsProvider::Sapi) {
+        LogD("SAPI dispatch (explicit)");
+        std::vector<int16_t> pcm = SapiTTS::Synthesize(
+            message, voice, gender, culture, speed, volume);
+        bool ok = !pcm.empty();
+        if (ok)
+            dispatchQueue->Push(std::move(pcm));
+        dispatchQueue->MarkDone();
+        finalizeCache(ok);
+
     } else {
-        // Unknown provider or Sapi — synthesize-all via SAPI
+        LogW("SAPI fallback — unrecognized provider: " + std::string(TtsProviderName(provider)));
         std::vector<int16_t> pcm = SapiTTS::Synthesize(
             message, voice, gender, culture, speed, volume);
         bool ok = !pcm.empty();
