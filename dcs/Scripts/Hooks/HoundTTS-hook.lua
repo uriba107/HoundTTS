@@ -11,6 +11,12 @@
 
 local status, err = pcall(function()
     local lfs = require("lfs")
+
+    -- Truncate log file once per DCS session (hook loads on DCS start)
+    local logPath = lfs.writedir() .. [[Logs\HoundTTS.log]]
+    local f = io.open(logPath, "w")
+    if f then f:close() end
+
     dofile(lfs.writedir() .. [[Mods\Services\HoundTTS\Scripts\HoundTTS.lua]])
 end)
 
