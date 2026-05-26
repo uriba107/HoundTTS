@@ -48,6 +48,15 @@ void ConfigReader::Load(const std::string& writedir) {
     awsSecretKey_.clear();
     awsRegion_.clear();
     awsPollyEngine_.clear();
+    supertonicPath_.clear();
+    supertonicModelPath_.clear();
+    supertonicVoiceStyle_.clear();
+    supertonicVoiceStylePath_.clear();
+    supertonicLang_.clear();
+    supertonicTotalSteps_  = 8;
+    supertonicSpeed_       = 1.05f;
+    supertonicThreads_     = 4;
+    supertonicMaxConcurrent_ = 2;
     discordToken_.clear();
     logLevel_.clear();
     cacheEnabled_ = true;
@@ -84,6 +93,24 @@ void ConfigReader::Load(const std::string& writedir) {
         if (!piperVoicePath_.empty() && piperVoicePath_.back() != '\\' && piperVoicePath_.back() != '/') piperVoicePath_ += '\\';
         piperVoicePath_ += "Mods\\Services\\HoundTTS\\voices\\";
     }
+
+    if (supertonicPath_.empty()) {
+        supertonicPath_ = writedir_;
+        if (!supertonicPath_.empty() && supertonicPath_.back() != '\\' && supertonicPath_.back() != '/') supertonicPath_ += '\\';
+        supertonicPath_ += "Mods\\Services\\HoundTTS\\bin\\supertonic";
+    }
+    if (supertonicModelPath_.empty()) {
+        supertonicModelPath_ = writedir_;
+        if (!supertonicModelPath_.empty() && supertonicModelPath_.back() != '\\' && supertonicModelPath_.back() != '/') supertonicModelPath_ += '\\';
+        supertonicModelPath_ += "Mods\\Services\\HoundTTS\\bin\\supertonic\\models";
+    }
+    if (supertonicVoiceStyle_.empty()) supertonicVoiceStyle_ = "M1";
+    if (supertonicVoiceStylePath_.empty()) {
+        supertonicVoiceStylePath_ = writedir_;
+        if (!supertonicVoiceStylePath_.empty() && supertonicVoiceStylePath_.back() != '\\' && supertonicVoiceStylePath_.back() != '/') supertonicVoiceStylePath_ += '\\';
+        supertonicVoiceStylePath_ += "Mods\\Services\\HoundTTS\\bin\\supertonic\\voice_styles";
+    }
+    if (supertonicLang_.empty()) supertonicLang_ = "en";
 
     loaded_ = true;
 }
@@ -170,6 +197,33 @@ void ConfigReader::ParseIni(const std::string& content) {
         } else if (section == "LibreTranslate") {
             if (key == "endpoint") libreTranslateEndpoint_ = val;
             if (key == "api_key")  libreTranslateApiKey_  = val;
+        } else if (section == "Supertonic") {
+            if (key == "path") supertonicPath_ = val;
+            if (key == "model_path") supertonicModelPath_ = val;
+            if (key == "voice_style") supertonicVoiceStyle_ = val;
+            if (key == "voice_style_path") supertonicVoiceStylePath_ = val;
+            if (key == "lang") supertonicLang_ = val;
+            if (key == "total_steps") {
+                int v = 0;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v > 0) supertonicTotalSteps_ = v;
+            }
+            if (key == "speed") {
+                try {
+                    float v = std::stof(val);
+                    if (v > 0.0f) supertonicSpeed_ = v;
+                } catch (...) {}
+            }
+            if (key == "threads") {
+                int v = 0;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v > 0) supertonicThreads_ = v;
+            }
+            if (key == "max_concurrent") {
+                int v = 0;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v > 0) supertonicMaxConcurrent_ = v;
+            }
         } else if (section == "Discord") {
             if (key == "bot_token") discordToken_ = val;
         } else if (section == "General") {
@@ -281,6 +335,42 @@ std::string ConfigReader::GetLibreTranslateEndpoint() const {
 std::string ConfigReader::GetLibreTranslateApiKey() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return libreTranslateApiKey_;
+}
+std::string ConfigReader::GetSupertonicPath() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicPath_;
+}
+std::string ConfigReader::GetSupertonicModelPath() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicModelPath_;
+}
+std::string ConfigReader::GetSupertonicVoiceStyle() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicVoiceStyle_;
+}
+std::string ConfigReader::GetSupertonicVoiceStylePath() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicVoiceStylePath_;
+}
+std::string ConfigReader::GetSupertonicLang() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicLang_;
+}
+int ConfigReader::GetSupertonicTotalSteps() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicTotalSteps_;
+}
+float ConfigReader::GetSupertonicSpeed() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicSpeed_;
+}
+int ConfigReader::GetSupertonicThreads() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicThreads_;
+}
+int ConfigReader::GetSupertonicMaxConcurrent() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return supertonicMaxConcurrent_;
 }
 std::string ConfigReader::GetLogLevel() const {
     std::lock_guard<std::mutex> lock(mutex_);

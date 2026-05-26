@@ -7,7 +7,7 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 - **No PowerShell overhead** — connects natively to SRS via direct TCP/UDP protocol
 - **No focus stealing** — all TTS synthesis runs in background threads, no visible windows
 - **Parallel calls** — each TTS request is fire-and-forget, no blocking
-- **Multiple TTS providers** — Piper (offline, bundled), SAPI (Windows system voices, no API key), Azure, Google, ElevenLabs, OpenAI (and compatible APIs like LocalAI, Kitten TTS Server)
+- **Multiple TTS providers** — Piper (offline, bundled), Supertonic (offline, multilingual ONNX), SAPI (Windows system voices, no API key), Azure, Google, ElevenLabs, OpenAI (and compatible APIs like LocalAI, Kitten TTS Server)
 - **Translation** — translate text via OpenAI chat models with military aviation context awareness (preserves brevity codes like FOX 3, BULLSEYE, etc.)
 - **Credentials stay out of Lua** — API keys are read directly by the DLL from an INI file, never exposed in mission scripts or DCS logs
 - **Auto-detects SRS path** from the Windows registry — no manual path configuration needed
@@ -28,11 +28,12 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 
 Download the latest release from [GitHub releases](https://github.com/uriba107/HoundTTS/releases) and extract it into your DCS Saved Games folder (e.g. `%USERPROFILE%\Saved Games\DCS\`).
 
-Each release includes three archives:
+Each release includes four archives:
 
 - **`HoundTTS-windows.zip`** — the base package. Contains the DLL, all Lua scripts, and config examples. **This is all you need to get started** (with cloud or SAPI providers).
 - **`HoundTTS-piper-engine-windows.zip`** — the Piper TTS engine (~16 MB). Contains `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3), `onnxruntime.dll`, and `espeak-ng-data/`. Install this in addition to the base package if you want to use Piper TTS. The DLL keeps voice models loaded between calls, eliminating per-call cold-start latency. Only needs re-downloading when piper or onnxruntime is updated.
 - **`HoundTTS-piper-voices-windows.zip`** — two bundled English voice models (~120 MB). Download once, keep across updates. You can also skip this and download your own voices from [HuggingFace](https://huggingface.co/rhasspy/piper-voices) instead.
+- **`HoundTTS-supertonic-engine-windows.zip`** — the Supertonic TTS engine. Contains `supertonic.dll`, `onnxruntime.dll`, and bundled ONNX models with voice styles. Install this in addition to the base package if you want to use Supertonic TTS.
 
 > **Config files:** copy each `.example` file to the same name without `.example` and edit it. These files are never overwritten by updates — your live settings are safe.
 
@@ -92,27 +93,6 @@ The line **must** appear before the `sanitizeModule` block so that `require`, `p
 
 All providers are selected per-call via the `provider` field in `HoundTTS.Transmit`. The default is controlled by `HoundTTS.DEFAULT_PROVIDER` (default: `"piper"`).
 
-### Piper (offline, bundled)
-
-**No internet or API key required.** Synthesizes speech in-process via `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3). Voice models stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-piper-engine-windows.zip` and two bundled voice models in `HoundTTS-piper-voices-windows.zip`.
-
-```lua
-HoundTTS.Transmit("Bogey, bullseye 270 for 15",
-    { freqs = "251.0", coalition = 2, name = "GCI" },
-    { provider = "piper", voice = "en_US-lessac-low" }
-)
-```
-
-**Bundled voices:**
-
-| Model                   | Gender | Sample rate |
-| ----------------------- | ------ | ----------- |
-| `en_US-lessac-low.onnx` | Male   | 16 kHz      |
-| `en_US-ryan-low.onnx`   | Male   | 16 kHz      |
-
-Browse all available voices at **[rhasspy.github.io/piper-samples](https://rhasspy.github.io/piper-samples/)**.  
-Download additional models from [HuggingFace rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) and place them in the `voices\` folder (or set `voice_path` in the credentials INI).
-
 ### SAPI (Windows system voices)
 
 Uses the Windows Speech API 5.4 (`ISpVoice`) — the same engine used by Narrator and other Windows TTS. **No internet or API key required.** Uses whatever voices are installed on the Windows machine running DCS.
@@ -145,6 +125,57 @@ Voice selection priority: `voice` name match → `culture` + `gender` attribute 
 
 Supported `culture` values: `en-US`, `en-GB`, `en-AU`, `en-CA`, `fr-FR`, `de-DE`, `es-ES`, `it-IT`, `ru-RU`, `zh-CN`, `ja-JP`.  
 Additional voices can be installed via **Windows Settings → Time & Language → Speech → Add voices**.
+
+### Piper (offline, bundled)
+
+**No internet or API key required.** Synthesizes speech in-process via `piper.dll` (built from [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), GPLv3). Voice models stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-piper-engine-windows.zip` and two bundled voice models in `HoundTTS-piper-voices-windows.zip`.
+
+```lua
+HoundTTS.Transmit("Bogey, bullseye 270 for 15",
+    { freqs = "251.0", coalition = 2, name = "GCI" },
+    { provider = "piper", voice = "en_US-lessac-low" }
+)
+```
+
+**Bundled voices:**
+
+| Model                   | Gender | Sample rate |
+| ----------------------- | ------ | ----------- |
+| `en_US-lessac-low.onnx` | Male   | 16 kHz      |
+| `en_US-ryan-low.onnx`   | Male   | 16 kHz      |
+
+Browse all available voices at **[rhasspy.github.io/piper-samples](https://rhasspy.github.io/piper-samples/)**.  
+Download additional models from [HuggingFace rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) and place them in the `voices\` folder (or set `voice_path` in the credentials INI).
+
+### Supertonic (offline, multilingual ONNX)
+
+**No internet or API key required.** Synthesizes speech in-process via `supertonic.dll` (built from [supertone-inc/supertonic](https://github.com/supertone-inc/supertonic)). Supports **English, Korean, German, Japanese, and more** with high-quality neural voices. Voice styles stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-supertonic-engine-windows.zip` with bundled ONNX models and voice styles.
+
+```lua
+HoundTTS.Transmit("Bogey, bullseye 270 for 15",
+    { freqs = "251.0", coalition = 2, name = "GCI" },
+    { provider = "supertonic", voice = "M1", culture = "en", speed = 1.05 }
+)
+```
+
+**Bundled voice styles:**
+
+| Style | Gender |
+| ----- | ------ |
+| `M1`  | Male   |
+| `M2`  | Male   |
+| `M3`  | Male   |
+| `M4`  | Male   |
+| `M5`  | Male   |
+| `F1`  | Female |
+| `F2`  | Female |
+| `F3`  | Female |
+| `F4`  | Female |
+| `F5`  | Female |
+
+Create custom voice styles at **[supertonic.supertone.ai/voice-builder](https://supertonic.supertone.ai/voice-builder)** and place the JSON files in the `bin\supertonic\voice_styles\` folder (or set `voice_style_path` in the credentials INI).
+
+Supported languages: English (`en`), Korean (`ko`), German (`de`), Japanese (`ja`), and more. Set the `culture` parameter to the ISO 639-1 language code.
 
 ### Azure Cognitive Services
 
@@ -312,7 +343,7 @@ SRS_ENCRYPT          = false          -- global encryption default
 SRS_ENC_KEY          = 0             -- global encryption key
 
 DEFAULT_TRANSMITTER  = "srs"
-DEFAULT_PROVIDER     = "sapi"       -- "piper" | "sapi" | "azure" | "google" | "elevenlabs" | "openai" | "aws" | "polly"
+DEFAULT_PROVIDER     = "sapi"       -- "piper" | "supertonic" | "sapi" | "azure" | "google" | "elevenlabs" | "openai" | "aws" | "polly"
 DEFAULT_VOICE        = ""            -- default voice/model name
 DEFAULT_CULTURE      = "en-US"       -- default culture/locale
 DEFAULT_GENDER       = "female"      -- "male" | "female"
@@ -502,16 +533,16 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 
 **`provider_params`** (table) — which TTS provider to use:
 
-| Field    | Type   | Default                     | Description                                                                                                                           |
-| -------- | ------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| provider | string | `HoundTTS.DEFAULT_PROVIDER` | `"piper"` / `"sapi"` (`"win"`) / `"azure"` / `"google"` (`"gcloud"`) / `"elevenlabs"` / `"openai"` / `"polly"` (`"aws"`)              |
-| voice    | string | `HoundTTS.DEFAULT_VOICE`    | Piper model name, SAPI voice name, Azure/Google/Polly voice name, or ElevenLabs voice ID                                              |
-| speaker  | string | `""`                        | Piper multi-speaker model: speaker name or numeric ID                                                                                 |
-| engine   | string | `"standard"`                | Polly engine: `"standard"` / `"neural"` / `"generative"`                                                                              |
-| culture  | string | `HoundTTS.DEFAULT_CULTURE`  | BCP-47 locale e.g. `"en-US"`, `"en-GB"` (used by SAPI, Azure, Google)                                                                 |
-| gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                                          |
-| speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                                                      |
-| volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                                                        |
+| Field    | Type   | Default                     | Description                                                                                                                               |
+| -------- | ------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| provider | string | `HoundTTS.DEFAULT_PROVIDER` | `"piper"` / `"supertonic"` / `"sapi"` (`"win"`) / `"azure"` / `"google"` (`"gcloud"`) / `"elevenlabs"` / `"openai"` / `"polly"` (`"aws"`) |
+| voice    | string | `HoundTTS.DEFAULT_VOICE`    | Piper model name, Supertonic voice style name (e.g. `M1`, `F1`), SAPI voice name, Azure/Google/Polly voice name, or ElevenLabs voice ID   |
+| speaker  | string | `""`                        | Piper multi-speaker model: speaker name or numeric ID                                                                                     |
+| engine   | string | `"standard"`                | Polly engine: `"standard"` / `"neural"` / `"generative"`                                                                                  |
+| culture  | string | `HoundTTS.DEFAULT_CULTURE`  | BCP-47 locale e.g. `"en-US"`, `"en-GB"` (used by SAPI, Azure, Google)                                                                     |
+| gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                                              |
+| speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                                                          |
+| volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                                                            |
 
 **`translation_params`** (table, optional) — translate before TTS:
 
@@ -525,15 +556,16 @@ When provided, the message is translated **before** being sent to the TTS engine
 
 **Provider routing:**
 
-| `transmitter` | `provider`     | Engine used                                                 |
-| ------------- | -------------- | ----------------------------------------------------------- |
-| `"srs"`       | `"piper"`      | Direct SRS + Piper TTS (offline)                            |
-| `"srs"`       | `"sapi"`       | Direct SRS + Windows SAPI 5.4 (offline)                     |
-| `"srs"`       | `"azure"`      | Direct SRS + Azure Cognitive Speech                         |
-| `"srs"`       | `"google"`     | Direct SRS + Google Cloud TTS                               |
-| `"srs"`       | `"elevenlabs"` | Direct SRS + ElevenLabs WebSocket                           |
-| `"srs"`       | `"aws"`        | Direct SRS + AWS Polly (`"polly"` alias)                    |
-| `"srs"`       | `"openai"`     | Direct SRS + OpenAI / LocalAI / Kitten TTS Server HTTP REST |
+| `transmitter` | `provider`     | Engine used                                                                                                                                                                                   |
+| ------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"srs"`       | `"piper"`      | Direct SRS + Piper TTS (offline)                                                                                                                                                              |
+| `"srs"`       | `"supertonic"` | Direct SRS + Supertonic TTS (offline, ONNX). voice=style name (e.g. `M1`, `F1`); culture=ISO 639-1 code (e.g. `"en"`, `"ko"`); defaults: `HoundTTS.DEFAULT_VOICE`, `HoundTTS.DEFAULT_CULTURE` |
+| `"srs"`       | `"sapi"`       | Direct SRS + Windows SAPI 5.4 (offline)                                                                                                                                                       |
+| `"srs"`       | `"azure"`      | Direct SRS + Azure Cognitive Speech                                                                                                                                                           |
+| `"srs"`       | `"google"`     | Direct SRS + Google Cloud TTS                                                                                                                                                                 |
+| `"srs"`       | `"elevenlabs"` | Direct SRS + ElevenLabs WebSocket                                                                                                                                                             |
+| `"srs"`       | `"aws"`        | Direct SRS + AWS Polly (`"polly"` alias)                                                                                                                                                      |
+| `"srs"`       | `"openai"`     | Direct SRS + OpenAI / LocalAI / Kitten TTS Server HTTP REST                                                                                                                                   |
 
 Returns: `speechTime` (number — estimated speech duration in seconds), `sessionId` (string — for use with `UpdateSession` / `KillSession`).
 
@@ -986,10 +1018,12 @@ This batch file wrapper:
 
 ```
 dist\
-├── base\          ← DLL + Lua scripts (always install this)
-├── piper-engine\  ← Piper TTS engine (~16 MB, install for Piper TTS)
-└── piper-voices\  ← Bundled voice models (~120 MB, or bring your own)
+├── base\               ← DLL + Lua scripts (always install this)
+├── piper-engine\       ← Piper TTS engine (~16 MB, install for Piper TTS)
+├── piper-voices\       ← Bundled voice models (~120 MB, or bring your own)
+└── supertonic-engine\  ← Supertonic TTS engine (install for Supertonic TTS)
 ```
+
 **Troubleshooting**
 
 If you encounter the following error during the build process:

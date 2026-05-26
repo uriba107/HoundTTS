@@ -122,3 +122,5 @@ release/
 # Allow prebuilt libs needed by the build
 !lib/lua.dll
 !lib/opus.lib
+
+.understand-anything/

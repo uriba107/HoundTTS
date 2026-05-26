@@ -27,17 +27,18 @@ local GAP            = 6    -- seconds between tests (overlap is fine)
 local TTS_PROVIDERS_TO_TEST = {
     "sapi",
     "piper",
+    "supertonic",
     "azure",
     "google",
     "elevenlabs",
     "aws",
-    "openai",
+    -- "openai",
 }
 
 local TRANSLATION_PROVIDERS_TO_TEST = {
     "google",
     "libretranslate",
-    "openai",
+    -- "openai",
 }
 
 -- Build a quick lookup set from the list above
@@ -165,7 +166,39 @@ local tests = {
       "Piper-quiet",
       { provider = "piper", voice = "en_US-lessac-low", culture = "en-US", speed = 1.0 },
       volume = 0.25 },
+    -- Supertonic (local offline multilingual TTS, ONNX-based)
+    -- Requires the supertonic-engine package (models and voice styles are bundled inside the engine ZIP).
+    -- Voice = voice style JSON name (e.g. M1, F1). Lang = ISO 639-1 code.
+    { "Supertonic M1 English",
+      "Supertonic offline TTS. Male voice style M1. English language.",
+      "Supertonic-M1",
+      { provider = "supertonic", voice = "M1", culture = "en", speed = 1.05 } },
 
+    { "Supertonic F1 English",
+      "Supertonic offline TTS. Female voice style F1. English language.",
+      "Supertonic-F1",
+      { provider = "supertonic", voice = "F1", culture = "en", speed = 1.05 } },
+
+    { "Supertonic M1 Korean",
+      "수퍼토닉 다국어 TTS 테스트입니다. 한국어 음성.",
+      "Supertonic-ko",
+      { provider = "supertonic", voice = "M1", culture = "ko", speed = 1.05 } },
+
+    { "Supertonic M1 German",
+      "Supertonic mehrsprachige Sprachsynthese. Deutsche Stimme.",
+      "Supertonic-de",
+      { provider = "supertonic", voice = "M1", culture = "de", speed = 1.05 } },
+
+    { "Supertonic speed 1.3",
+      "Supertonic at one point three speed. Faster speech rate.",
+      "Supertonic-fast",
+      { provider = "supertonic", voice = "M1", culture = "en", speed = 1.3 } },
+
+    { "Supertonic low volume (0.25)",
+      "Supertonic at quarter volume. This should be noticeably quieter.",
+      "Supertonic-quiet",
+      { provider = "supertonic", voice = "M1", culture = "en", speed = 1.05 },
+      volume = 0.25 },
     -- Azure Cognitive Services Speech
     -- Requires [Azure] key + region in HoundTTS-credentials.ini.
     { "Azure en-US-AriaNeural",
@@ -311,6 +344,8 @@ local tests = {
       "OpenAI-quiet",
       { provider = "openai", voice = "fantine", speed = 1.0 },
       volume = 0.25 },
+
+
     -- Speed extremes
     { "SAPI slow (0.6x)",
       "Slow speed at zero point six.",
@@ -406,13 +441,23 @@ local testsXL = {
       { provider = "piper", voice = "en_US-lessac-low", culture = "en-US", speed = 1.0 },
       { provider = "libretranslate", language = "fr" } },
 
-    -- OpenAI pocket-tts (alba) + OpenAI Translate → German
-    { "OpenAI pocket-tts + OpenAI Translate → de",
+    { "Supertonic F3 + LibreTranslate → fr",
+      "Runway two seven, wind two five zero at twelve knots. Cleared for takeoff.",
+      "SupertonicF3XL-fr",
+      { provider = "supertonic", voice = "F3", culture = "fr" },
+      { provider = "libretranslate", language = "fr" } },
+      { "Supertonic M3 + LibreTranslate → de",
       "BOGEY, BRAA two seven zero for thirty five, angels twenty, hot, hostile.",
-      "OpenAIXL-de",
-      { provider = "openai", voice = "alba", speed = 1.0 },
-      { provider = "openai", language = "de" } },
-}
+      "SupertonicM3XL-de",
+      { provider = "supertonic", voice = "M3", culture = "de" },
+      { provider = "libretranslate", language = "de" } },
+    -- OpenAI pocket-tts (alba) + OpenAI Translate → German
+    -- { "OpenAI pocket-tts + OpenAI Translate → de",
+    --   "BOGEY, BRAA two seven zero for thirty five, angels twenty, hot, hostile.",
+    --   "OpenAIXL-de",
+    --   { provider = "openai", voice = "alba", speed = 1.0 },
+    --   { provider = "openai", language = "de" } },
+  }
 
 -- Schedule Stage 2 tests (both TTS and translation providers must be enabled)
 for i, t in ipairs(testsXL) do

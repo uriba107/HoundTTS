@@ -38,6 +38,7 @@ enum class TtsProvider {
     AWS,
     KittenTTS,   // deprecated — reroutes through OpenAI endpoint
     OpenAI,
+    Supertonic,
     Unknown
 };
 
@@ -52,6 +53,7 @@ inline TtsProvider ParseTtsProvider(const std::string& s) {
     if (token == "aws" || token == "polly" || token == "amazon")            return TtsProvider::AWS;
     if (token == "kittentts" || token == "kitten_tts" || token == "kitten") return TtsProvider::KittenTTS;
     if (token == "openai")                                                  return TtsProvider::OpenAI;
+    if (token == "supertonic")                                               return TtsProvider::Supertonic;
     return TtsProvider::Unknown;
 }
 
@@ -65,6 +67,7 @@ inline const char* TtsProviderName(TtsProvider p) {
         case TtsProvider::AWS:        return "aws";
         case TtsProvider::KittenTTS:  return "kittentts";
         case TtsProvider::OpenAI:     return "openai";
+        case TtsProvider::Supertonic: return "supertonic";
         default:                      return "unknown";
     }
 }

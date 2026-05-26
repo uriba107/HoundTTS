@@ -2,10 +2,10 @@ name: Build (Windows / MSVC)
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*" ]
+    branches: ["main"]
+    tags: ["v*"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -240,6 +240,13 @@ jobs:
           path: dist/piper-voices/
           if-no-files-found: error
 
+      - name: Upload dist/supertonic-engine
+        uses: actions/upload-artifact@v6
+        with:
+          name: HoundTTS-supertonic-engine-windows
+          path: dist/supertonic-engine/
+          if-no-files-found: error
+
       # --------------------------------------------------------
       # 8. Create GitHub Release (on tag push only)
       # --------------------------------------------------------
@@ -250,6 +257,7 @@ jobs:
           Compress-Archive -Path dist\base\*           -DestinationPath HoundTTS-windows.zip                  -Force
           Compress-Archive -Path dist\piper-engine\*   -DestinationPath HoundTTS-piper-engine-windows.zip      -Force
           Compress-Archive -Path dist\piper-voices\*   -DestinationPath HoundTTS-piper-voices-windows.zip      -Force
+          Compress-Archive -Path dist\supertonic-engine\* -DestinationPath HoundTTS-supertonic-engine-windows.zip -Force
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -259,5 +267,6 @@ jobs:
             HoundTTS-windows.zip
             HoundTTS-piper-engine-windows.zip
             HoundTTS-piper-voices-windows.zip
+            HoundTTS-supertonic-engine-windows.zip
           generate_release_notes: true
           draft: true
