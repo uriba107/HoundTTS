@@ -58,6 +58,17 @@ public:
     std::string GetAwsRegion() const;
     std::string GetAwsPollyEngine() const;
 
+    // [Supertonic]
+    std::string GetSupertonicPath() const;
+    std::string GetSupertonicModelPath() const;
+    std::string GetSupertonicVoiceStyle() const;
+    std::string GetSupertonicVoiceStylePath() const;
+    std::string GetSupertonicLang() const;
+    int         GetSupertonicTotalSteps() const;
+    float       GetSupertonicSpeed() const;
+    int         GetSupertonicThreads() const;
+    int         GetSupertonicMaxConcurrent() const;
+
     // [Discord]
     std::string GetDiscordToken() const;
 
@@ -99,6 +110,15 @@ private:
     std::string awsSecretKey_;
     std::string awsRegion_;
     std::string awsPollyEngine_;
+    std::string supertonicPath_;
+    std::string supertonicModelPath_;
+    std::string supertonicVoiceStyle_;
+    std::string supertonicVoiceStylePath_;
+    std::string supertonicLang_;
+    int         supertonicTotalSteps_  = 8;
+    float       supertonicSpeed_      = 1.05f;
+    int         supertonicThreads_    = 4;
+    int         supertonicMaxConcurrent_ = 2;
     std::string discordToken_;
     std::string logLevel_;
     bool cacheEnabled_ = true;

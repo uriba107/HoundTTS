@@ -88,6 +88,7 @@ add_library(HoundTTS SHARED
     src/providers/tts/aws/aws_tts.cpp
     src/providers/tts/kitten/kitten_tts.cpp
     src/providers/tts/openai/openai_tts.cpp
+    src/providers/tts/supertonic/supertonic_tts.cpp
     # Translation providers
     src/providers/translate/openai/openai_chat.cpp
     src/providers/translate/google/google_translate.cpp

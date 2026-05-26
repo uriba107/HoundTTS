@@ -63,7 +63,7 @@ RUN powershell -NoProfile -Command \
 ARG VCPKG_TAG=2026.03.18
 RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
     C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics && \
-    C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static && \
+    C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static nlohmann-json:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
 ARG HTTPLIB_VERSION=v0.43.1
@@ -71,6 +71,32 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
      -OutFile 'C:\deps\include\httplib.h'"
+
+
+# Pre-download onnxruntime (GitHub release, HTTPS integrity)
+# Place it where libpiper's CMakeLists expects ONNXRUNTIME_DIR
+# Uses wget (already installed via Chocolatey) because its built-in retry is
+# more resilient against GitHub's intermittent connection closures on CI.
+ARG ONNXRUNTIME_VERSION=1.22.1
+ARG ONNXRUNTIME_SHA256=855276cd4be3cda14fe636c69eb038d75bf5bcd552bda1193a5d79c51f436dfe
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$url    = 'https://github.com/microsoft/onnxruntime/releases/download/v' + $env:ONNXRUNTIME_VERSION + '/onnxruntime-win-x64-' + $env:ONNXRUNTIME_VERSION + '.zip'; \
+     $zip    = 'C:\ort.zip'; \
+     wget.exe --retry-connrefused --waitretry=3 --tries=5 -q \"$url\" -O \"$zip\"; \
+     $expectedSha = [string]$env:ONNXRUNTIME_SHA256; \
+     if ($expectedSha.Length -gt 0) { \
+       $actualSha = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower(); \
+       if ($actualSha -ne $expectedSha.ToLower()) { \
+         Write-Host \"SHA256 mismatch for onnxruntime.zip. Expected: $expectedSha, Actual: $actualSha\"; \
+         Remove-Item $zip; \
+         exit 1; \
+       } \
+       Write-Host \"SHA256 checksum verified.\"; \
+     } \
+     Expand-Archive -Path $zip -DestinationPath 'C:\ort-tmp'; \
+     Move-Item (Get-Item 'C:\ort-tmp\onnxruntime-*').FullName 'C:\ort'; \
+     Remove-Item 'C:\ort-tmp' -Recurse -Force; \
+     Remove-Item $zip"
 
 # Voice models (large downloads, cache here — used by piper stage)
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
@@ -105,15 +131,6 @@ COPY tools/patch_piper.ps1 C:/tools/
 RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_piper.ps1
 
 
-# Pre-download onnxruntime 1.22.0
-# Place it where libpiper's CMakeLists expects ONNXRUNTIME_DIR
-RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "$url = 'https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip'; \
-     $zip = 'C:\ort.zip'; \
-     Invoke-WebRequest -Uri $url -OutFile $zip; \
-     Expand-Archive -Path $zip -DestinationPath 'C:\ort'; \
-     Remove-Item $zip"
-
 # Build libpiper: auto-clones espeak-ng (ExternalProject_Add); use pre-downloaded onnxruntime
 # Phase 1: configure + build espeak-ng only
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
@@ -121,7 +138,7 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
       -G "Ninja" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=C:\piper1-install \
-      -DONNXRUNTIME_DIR=C:/ort/onnxruntime-win-x64-1.22.0 \
+      -DONNXRUNTIME_DIR=C:/ort \
       -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
       "-DCMAKE_CXX_FLAGS=/DESPEAK_API= /utf-8" && \
     cmake --build C:\piper1-build --parallel --target espeak_ng_external
@@ -140,6 +157,7 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
     cmake --build C:\piper1-build --parallel --config Release && \
     cmake --install C:\piper1-build && \
     rmdir /S /Q C:\piper1-build
+
 # Assemble piper-engine dist (DLLs + espeak-ng-data + license — ~16 MB)
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force 'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
@@ -152,6 +170,60 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force 'C:\dist\piper-voices\Mods\Services\HoundTTS\voices' | Out-Null; \
      Copy-Item -Recurse -Force 'C:\deps\voices\*'                       'C:\dist\piper-voices\Mods\Services\HoundTTS\voices'"
+
+# ============================================================
+# Stage 2b: supertonic — clone supertonic + compile supertonic.dll
+#            Shares onnxruntime with piper (same ORT 1.22.0)
+# ============================================================
+FROM deps AS supertonic
+
+ARG SUPERTONIC_TAG=5379cc4e4297cec249a8a71283fc44d55ec327f1
+RUN git init C:\supertonic \
+    && cd C:\supertonic \
+    && git remote add origin https://github.com/supertone-inc/supertonic.git \
+    && git fetch --depth 1 origin %SUPERTONIC_TAG% \
+    && git checkout FETCH_HEAD
+
+# Patch helper.cpp for ORT 1.22.0 (Session constructor char* -> wchar_t*)
+COPY tools/patch_supertonic.ps1 C:/tools/
+RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_supertonic.ps1
+
+# Copy our C API wrapper + CMakeLists
+COPY tools/supertonic_api.cpp C:/tools/supertonic_api.cpp
+COPY tools/supertonic_cmake/CMakeLists.txt C:/tools/supertonic_cmake/CMakeLists.txt
+COPY include/supertonic/ C:/src_include/supertonic/
+
+# Build supertonic.dll
+RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
+    cmake -S C:\tools\supertonic_cmake -B C:\supertonic-build \
+      -G "Ninja" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake \
+      -DVCPKG_TARGET_TRIPLET=x64-windows-static \
+      -DONNXRUNTIME_DIR=C:/ort \
+      -DSUPERTONIC_SRC_DIR=C:/supertonic/cpp \
+      -DSUPERTONIC_API_CPP=C:/tools/supertonic_api.cpp \
+      -DSUPERTONIC_INCLUDE=C:/src_include && \
+    cmake --build C:\supertonic-build --parallel
+
+# Download ONNX models + voice styles from HuggingFace (pinned commit for caching)
+ARG SUPERTONIC_ASSETS_HASH=3cadd1ee6394adea1bd021217a0e650ede09a323
+RUN git lfs install \
+    && git init C:\supertonic-assets \
+    && cd C:\supertonic-assets \
+    && git remote add origin https://huggingface.co/Supertone/supertonic-3 \
+    && git fetch --depth 1 origin %SUPERTONIC_ASSETS_HASH% \
+    && git checkout FETCH_HEAD
+
+# Assemble supertonic-engine dist (DLL + onnxruntime + models + voice_styles — all in bin/supertonic/)
+RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
+    "$base = 'C:\dist\supertonic-engine\Mods\Services\HoundTTS\bin\supertonic'; \
+     New-Item -ItemType Directory -Force $base | Out-Null; \
+     Copy-Item 'C:\supertonic-build\supertonic.dll'                    $base; \
+     Copy-Item 'C:\ort\lib\onnxruntime.dll'                        $base; \
+     Copy-Item -Recurse 'C:\supertonic-assets\onnx'                    \"$base\models\"; \
+     Copy-Item -Recurse 'C:\supertonic-assets\voice_styles'            \"$base\voice_styles\""
+
 
 # ============================================================
 # Stage 3: build — copy source, compile, assemble dist/base
@@ -205,6 +277,9 @@ COPY dcs/Config/HoundTTS-credentials.ini.example      C:\\dist\\base\\Config\\Ho
 # Piper engine + voices from piper stage
 COPY --from=piper C:\\dist\\piper-engine   C:\\dist\\piper-engine
 COPY --from=piper C:\\dist\\piper-voices   C:\\dist\\piper-voices
+
+# Supertonic engine (DLL + onnxruntime + models + voice_styles) from supertonic stage
+COPY --from=supertonic C:\\dist\\supertonic-engine   C:\\dist\\supertonic-engine
 
 # Copy dist to C:\output on run
 CMD xcopy /E /I /Y C:\\dist C:\\output

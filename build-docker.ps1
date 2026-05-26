@@ -83,6 +83,24 @@ if ($Windows) {
     Check-DepPin "vcpkg"   $deps['VCPKG_TAG']             "https://api.github.com/repos/microsoft/vcpkg/releases/latest"        { param($r) $r.tag_name }
     Check-DepPin "httplib" $deps['HTTPLIB_VERSION']       "https://api.github.com/repos/yhirose/cpp-httplib/releases/latest"    { param($r) $r.tag_name }
     Check-DepPin "piper"   $deps['PIPER1_GPL_TAG']        "https://api.github.com/repos/OHF-Voice/piper1-gpl/releases/latest"   { param($r) $r.tag_name }
+    Check-DepPin "supertonic" $deps['SUPERTONIC_TAG']    "https://api.github.com/repos/supertone-inc/supertonic/tags?per_page=100" { param($r) ($r | ForEach-Object { $_.name } | Sort-Object { [version]($_ -replace '^v','') } -Descending)[0] }
+
+    # Supertonic assets (HuggingFace) -- check via git ls-remote
+    try {
+        $pinned = $deps['SUPERTONIC_ASSETS_HASH']
+        $lsOut  = git ls-remote https://huggingface.co/Supertone/supertonic-3 HEAD 2>$null
+        $latest = ($lsOut -split '\s')[0]
+        $short  = if ($pinned.Length -gt 12) { $pinned.Substring(0,12) } else { $pinned }
+        $shortL = if ($latest.Length -gt 12) { $latest.Substring(0,12) } else { $latest }
+        if ($latest -eq $pinned) {
+            Write-Host ("  " + "st-assets".PadRight(10) + " " + ($short + "...").PadRight(18) + " (up to date)") -ForegroundColor Green
+        } else {
+            Write-Host ("  " + "st-assets".PadRight(10) + " " + ($short + "...").PadRight(18) + " -> " + $shortL + "... available") -ForegroundColor Yellow
+            $anyOutdated = $true
+        }
+    } catch {
+        Write-Host ("  " + "st-assets".PadRight(10) + " (could not fetch latest)") -ForegroundColor Gray
+    }
 
     if ($anyOutdated) {
         Write-Host ""
@@ -167,6 +185,12 @@ try {
     Compress-Archive -Path (Join-Path $ScriptDir "dist\base\*")          -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-windows.zip")                      -Force
     Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-engine\*")  -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-engine-windows.zip")      -Force
     Compress-Archive -Path (Join-Path $ScriptDir "dist\piper-voices\*")  -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-piper-voices-windows.zip")      -Force
+    $stEngineDir = Join-Path $ScriptDir "dist\supertonic-engine"
+    if (Test-Path $stEngineDir) {
+        Compress-Archive -Path (Join-Path $stEngineDir "*") -DestinationPath (Join-Path $ScriptDir "release\HoundTTS-supertonic-engine-windows.zip") -Force
+    } else {
+        Write-Warning "dist\supertonic-engine folder not found -- skipping supertonic-engine zip (check earlier build errors)"
+    }
 }
 
 
@@ -175,16 +199,17 @@ Write-Host "=== Build successful! ===" -ForegroundColor Green
 Write-Host "Output in: $OutputDir"
 Write-Host ""
 Write-Host "Packages:"
-Write-Host "  dist\base\          <- DLL + Lua scripts"
-Write-Host "  dist\piper-engine\  <- Piper TTS engine (piper.dll + onnxruntime.dll + espeak-ng-data)"
-Write-Host "  dist\piper-voices\  <- Bundled Piper voice models (~120 MB)"
-Write-Host "  release\            <- Zip packages"
+Write-Host "  dist\base\              - DLL + Lua scripts"
+Write-Host "  dist\piper-engine\      - Piper TTS engine (piper.dll + onnxruntime.dll + espeak-ng-data)"
+Write-Host "  dist\piper-voices\      - Bundled Piper voice models (~120 MB)"
+Write-Host "  dist\supertonic-engine\ - Supertonic TTS engine (supertonic.dll + onnxruntime.dll + models + voice styles)"
+Write-Host "  release\                - Zip packages"
 Write-Host ""
 Write-Host "To install, copy the contents of the desired package(s) into:"
-Write-Host "  $env:USERPROFILE\Saved Games\DCS.openbeta\"
-Write-Host "  (or DCS\ for stable release)"
+Write-Host "  $env:USERPROFILE\Saved Games\DCS\"
 Write-Host ""
 Write-Host "For Piper TTS, install base\ + piper-engine\ + piper-voices\ (or bring your own voices)."
+Write-Host "For Supertonic TTS, install base\ + supertonic-engine\."
 Write-Host ""
 
 Stop-Transcript | Out-Null

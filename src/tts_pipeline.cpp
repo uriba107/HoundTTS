@@ -1,4 +1,5 @@
 #include "tts_pipeline.h"
+#include <algorithm>
 #include "session.h"
 #include "providers/generators/tone.h"
 #include "providers/generators/noise.h"
@@ -10,6 +11,7 @@
 #include "providers/tts/elevenlabs/elevenlabs_tts.h"
 #include "providers/tts/aws/aws_tts.h"
 #include "providers/tts/openai/openai_tts.h"
+#include "providers/tts/supertonic/supertonic_tts.h"
 #include "providers/translate/openai/openai_chat.h"
 #include "providers/translate/google/google_translate.h"
 #include "providers/translate/libretranslate/libretranslate.h"
@@ -88,7 +90,8 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
 
     // Apply provider-appropriate default if speed was not set (sentinel -999)
     double speed = req.speed;
-    if (speed <= -999.0) {
+    bool speedExplicit = (speed > -999.0);
+    if (!speedExplicit) {
         // SAPI: 0 = normal rate (-10..+10 scale)
         // All others: 1.0 = normal multiplier
         speed = (provider == TtsProvider::Sapi) ? 0.0 : 1.0;
@@ -289,6 +292,54 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         std::thread([message, openaiEndpoint, openaiKey, openaiModel, voice, speed, volume, dispatchQueue, finalizeCache]() {
             bool ok = OpenAITTS::SynthesizeToQueue(message, openaiEndpoint, openaiKey,
                                                    openaiModel, voice, speed, volume, *dispatchQueue);
+            finalizeCache(ok);
+        }).detach();
+
+    } else if (provider == TtsProvider::Supertonic) {
+        std::string stPath       = cfg.GetSupertonicPath();
+        std::string stModelPath  = cfg.GetSupertonicModelPath();
+        std::string stStyleName;
+        if (!voice.empty()) {
+            stStyleName = voice;
+        } else if (!gender.empty()) {
+            char g = static_cast<char>(std::tolower(static_cast<unsigned char>(gender[0])));
+            std::string id = speaker.empty() ? "1" : speaker;
+            stStyleName = (g == 'f') ? ("F" + id) : ("M" + id);
+        } else {
+            stStyleName = cfg.GetSupertonicVoiceStyle();
+        }
+        std::string stStyleDir   = cfg.GetSupertonicVoiceStylePath();
+        std::string stLang       = culture.empty() ? cfg.GetSupertonicLang() : culture;
+        // Supertonic uses bare ISO 639-1 codes (e.g. "en", "de"); strip region suffix if present
+        { auto sep = stLang.find_first_of("_-"); if (sep != std::string::npos) stLang = stLang.substr(0, sep); }
+        int         stSteps      = cfg.GetSupertonicTotalSteps();
+        float       stSpeed      = speedExplicit ? static_cast<float>(speed) : cfg.GetSupertonicSpeed();
+        stSpeed = std::max(0.5f, std::min(2.0f, stSpeed));
+        int         stMaxConc    = cfg.GetSupertonicMaxConcurrent();
+        int         stThreads    = cfg.GetSupertonicThreads();
+
+        // Build style path: styleDir/styleName.json
+        std::string stStylePath = stStyleDir;
+        if (!stStylePath.empty() && stStylePath.back() != '\\' && stStylePath.back() != '/')
+            stStylePath += '\\';
+        stStylePath += stStyleName;
+        // Append .json if not already present (case-insensitive)
+        {
+            bool hasExt = false;
+            if (stStylePath.size() >= 5) {
+                std::string tail = stStylePath.substr(stStylePath.size() - 5);
+                for (auto& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                hasExt = (tail == ".json");
+            }
+            if (!hasExt) stStylePath += ".json";
+        }
+
+        std::thread([message, stPath, stModelPath, stStylePath, stLang,
+                     stSteps, stSpeed, volume, stMaxConc, stThreads,
+                     dispatchQueue, finalizeCache]() {
+            bool ok = SupertonicTTS::SynthesizeToQueue(
+                message, stPath, stModelPath, stStylePath, stLang,
+                stSteps, stSpeed, volume, stMaxConc, stThreads, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 
