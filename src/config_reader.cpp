@@ -57,6 +57,7 @@ void ConfigReader::Load(const std::string& writedir) {
     supertonicSpeed_       = 1.05f;
     supertonicThreads_     = 4;
     supertonicMaxConcurrent_ = 2;
+    edgeBufferMs_ = 200;
     discordToken_.clear();
     logLevel_.clear();
     cacheEnabled_ = true;
@@ -224,6 +225,12 @@ void ConfigReader::ParseIni(const std::string& content) {
                 auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
                 if (ec == std::errc{} && v > 0) supertonicMaxConcurrent_ = v;
             }
+        } else if (section == "Edge") {
+            if (key == "buffer_ms") {
+                int v = 200;
+                auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), v);
+                if (ec == std::errc{} && v >= 0 && v <= 5000) edgeBufferMs_ = v;
+            }
         } else if (section == "Discord") {
             if (key == "bot_token") discordToken_ = val;
         } else if (section == "General") {
@@ -323,6 +330,10 @@ std::string ConfigReader::GetAwsRegion() const {
 std::string ConfigReader::GetAwsPollyEngine() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return awsPollyEngine_;
+}
+int ConfigReader::GetEdgeBufferMs() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return edgeBufferMs_;
 }
 std::string ConfigReader::GetDiscordToken() const {
     std::lock_guard<std::mutex> lock(mutex_);

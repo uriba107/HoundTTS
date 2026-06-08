@@ -1,4 +1,4 @@
-#include "../audio_queue.h"
+#include "audio_queue.h"
 #include <opus/opus.h>
 #include "opus_encoder.h"
 #include <cstring>

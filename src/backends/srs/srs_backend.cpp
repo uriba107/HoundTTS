@@ -1,8 +1,8 @@
 #include "srs_backend.h"
 #include "srs_types.h"
 #include "srs_client.h"
-#include "../codecs/opus_encoder.h"
-#include "../audio_queue.h"
+#include "codecs/opus_encoder.h"
+#include "audio_queue.h"
 #include "utils.h"
 
 #include <thread>

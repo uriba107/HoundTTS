@@ -12,12 +12,13 @@
 #include "providers/tts/aws/aws_tts.h"
 #include "providers/tts/openai/openai_tts.h"
 #include "providers/tts/supertonic/supertonic_tts.h"
+#include "providers/tts/edge/edge_tts.h"
 #include "providers/translate/openai/openai_chat.h"
 #include "providers/translate/google/google_translate.h"
 #include "providers/translate/libretranslate/libretranslate.h"
 #include "providers/translate/aws/aws_translate.h"
 #include "providers/translate/azure/azure_translate.h"
-#include "backends/codecs/opus_encoder.h"
+#include "codecs/opus_encoder.h"
 #include "config_reader.h"
 #include "backends/pcm_cache.h"
 #include "utils.h"
@@ -340,6 +341,13 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             bool ok = SupertonicTTS::SynthesizeToQueue(
                 message, stPath, stModelPath, stStylePath, stLang,
                 stSteps, stSpeed, volume, stMaxConc, stThreads, *dispatchQueue);
+            finalizeCache(ok);
+        }).detach();
+
+    } else if (provider == TtsProvider::Edge) {
+        std::thread([message, voice, culture, gender, speed, volume, dispatchQueue, finalizeCache]() {
+            bool ok = EdgeTTS::SynthesizeToQueue(message, voice, culture, gender,
+                                                  speed, volume, *dispatchQueue);
             finalizeCache(ok);
         }).detach();
 

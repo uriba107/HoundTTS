@@ -3,7 +3,7 @@
 #ifndef HOUNDTTS_OPUS_ENCODER_H
 #define HOUNDTTS_OPUS_ENCODER_H
 
-#include "../audio_queue.h"
+#include "audio_queue.h"
 #include <vector>
 #include <cstdint>
 

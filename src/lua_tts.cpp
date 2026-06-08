@@ -129,7 +129,7 @@ static void ExpandFreqs(const std::string& freqsIn,
 //   .encKey       number
 //   .lat/.lon/.alt numbers (pre-converted by Lua)
 // ep      : table — provider parameters
-//   .provider     "piper"|"azure"|"google"|"elevenlabs"|"aws"|"polly"|"sapi"|"openai"|"kitten"/"kittentts" (deprecated—use "openai")
+//   .provider     "piper"|"azure"|"google"|"elevenlabs"|"aws"|"polly"|"sapi"|"openai"|"edge"|"edgetts"|"kitten"/"kittentts" (deprecated—use "openai")
 //   .voice        string
 //   .speaker      string  (piper multi-speaker only)
 //   .culture      string  e.g. "en-US"

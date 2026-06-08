@@ -28,6 +28,7 @@ local TTS_PROVIDERS_TO_TEST = {
     "sapi",
     "piper",
     "supertonic",
+    "edge",
     "azure",
     "google",
     "elevenlabs",
@@ -199,6 +200,40 @@ local tests = {
       "Supertonic-quiet",
       { provider = "supertonic", voice = "M1", culture = "en", speed = 1.05 },
       volume = 0.25 },
+    -- Edge TTS (free cloud, no API key needed)
+    -- Uses Microsoft Edge's Read Aloud service. Same neural voices as Azure but free.
+    -- Voice = Azure Neural voice ShortName (e.g. en-US-AriaNeural). No credentials required.
+    { "Edge en-US-AriaNeural female",
+      "Edge TTS. Aria Neural voice. Free cloud text to speech, no API key.",
+      "Edge-Aria",
+      { provider = "edge", voice = "en-US-AriaNeural", culture = "en-US", speed = 1.0 } },
+
+    { "Edge en-US-GuyNeural male",
+      "Edge TTS. Guy Neural voice. Male American English.",
+      "Edge-Guy",
+      { provider = "edge", voice = "en-US-GuyNeural", culture = "en-US", speed = 1.0 } },
+
+    { "Edge en-GB-SoniaNeural British",
+      "Edge TTS. Sonia Neural voice. British English female.",
+      "Edge-Sonia",
+      { provider = "edge", voice = "en-GB-SoniaNeural", culture = "en-GB", speed = 1.0 } },
+
+    { "Edge auto-select by culture+gender",
+      "Edge auto-selected voice from culture and gender only.",
+      "Edge-auto",
+      { provider = "edge", culture = "en-US", gender = "female", speed = 1.0 } },
+
+    { "Edge speed 1.4",
+      "Edge TTS at one point four times normal speed.",
+      "Edge-fast",
+      { provider = "edge", voice = "en-US-AriaNeural", culture = "en-US", speed = 1.4 } },
+
+    { "Edge low volume (0.25)",
+      "Edge TTS at quarter volume. This should be noticeably quieter.",
+      "Edge-quiet",
+      { provider = "edge", voice = "en-US-AriaNeural", culture = "en-US", speed = 1.0 },
+      volume = 0.25 },
+
     -- Azure Cognitive Services Speech
     -- Requires [Azure] key + region in HoundTTS-credentials.ini.
     { "Azure en-US-AriaNeural",

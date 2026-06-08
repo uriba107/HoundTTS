@@ -55,9 +55,19 @@ inline double GetSpeechTime(int length, double speed = 1.0,
         // OpenAI: direct speed multiplier (0.25–4.0)
         speedFactor = std::max(0.25, std::min(4.0, speed));
         break;
+    case TtsProvider::Azure:
+    case TtsProvider::Edge:
+        // Azure & Edge use the same neural voices and SSML prosody rate
+        // mapping (speed 1.0 = +0%, 2.0 = +100%). Clamp to 0.5–3.0.
+        speedFactor = std::max(0.5, std::min(3.0, speed));
+        break;
+    case TtsProvider::Supertonic:
+        // Supertonic: direct speed multiplier, clamped 0.5–2.0
+        speedFactor = std::max(0.5, std::min(2.0, speed));
+        break;
     default:
-        // Azure, Unknown: direct multiplier
-        speedFactor = speed;
+        // Unknown: direct multiplier, clamped to sane range
+        speedFactor = std::max(0.1, std::min(4.0, speed));
         break;
     }
 
