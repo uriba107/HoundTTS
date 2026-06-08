@@ -7,7 +7,7 @@ A native C++ DLL replacement for [DCS-SimpleTextToSpeech](https://github.com/cir
 - **No PowerShell overhead** — connects natively to SRS via direct TCP/UDP protocol
 - **No focus stealing** — all TTS synthesis runs in background threads, no visible windows
 - **Parallel calls** — each TTS request is fire-and-forget, no blocking
-- **Multiple TTS providers** — Piper (offline, bundled), Supertonic (offline, multilingual ONNX), SAPI (Windows system voices, no API key), Azure, Google, ElevenLabs, OpenAI (and compatible APIs like LocalAI, Kitten TTS Server)
+- **Multiple TTS providers** — Piper (offline, bundled), Supertonic (offline, multilingual ONNX), SAPI (Windows system voices, no API key), Edge (free cloud neural TTS, no API key), Azure, Google, ElevenLabs, OpenAI (and compatible APIs like LocalAI, Kitten TTS Server)
 - **Translation** — translate text via OpenAI chat models with military aviation context awareness (preserves brevity codes like FOX 3, BULLSEYE, etc.)
 - **Credentials stay out of Lua** — API keys are read directly by the DLL from an INI file, never exposed in mission scripts or DCS logs
 - **Auto-detects SRS path** from the Windows registry — no manual path configuration needed
@@ -45,11 +45,32 @@ Saved Games\DCS\
 ├── Mods\Services\HoundTTS\
 │   ├── bin\
 │   │   ├── HoundTTS.dll
-│   │   └── piper\                    ← from piper-engine
-│   │       ├── piper.dll             ← in-process TTS engine (GPLv3)
+│   │   ├── piper\                    ← from piper-engine
+│   │   │   ├── piper.dll             ← in-process TTS engine (GPLv3)
+│   │   │   ├── onnxruntime.dll
+│   │   │   ├── espeak-ng-data\
+│   │   │   └── COPYING               ← GPLv3 license for piper.dll
+│   │   └── supertonic\               ← from supertonic-engine
+│   │       ├── supertonic.dll        ← in-process TTS engine
 │   │       ├── onnxruntime.dll
-│   │       ├── espeak-ng-data\
-│   │       └── COPYING               ← GPLv3 license for piper.dll
+│   │       ├── models\
+│   │       │   ├── duration_predictor.onnx
+│   │       │   ├── text_encoder.onnx
+│   │       │   ├── tts.json
+│   │       │   ├── unicode_indexer.json
+│   │       │   ├── vector_estimator.onnx
+│   │       │   └── vocoder.onnx
+│   │       └── voice_styles\
+│   │           ├── F1.json
+│   │           ├── F2.json
+│   │           ├── F3.json
+│   │           ├── F4.json
+│   │           ├── F5.json
+│   │           ├── M1.json
+│   │           ├── M2.json
+│   │           ├── M3.json
+│   │           ├── M4.json
+│   │           └── M5.json
 │   ├── voices\                       ← from piper-voices (or bring your own)
 │   │   ├── en_US-lessac-low.onnx
 │   │   ├── en_US-lessac-low.onnx.json
@@ -176,6 +197,27 @@ HoundTTS.Transmit("Bogey, bullseye 270 for 15",
 Create custom voice styles at **[supertonic.supertone.ai/voice-builder](https://supertonic.supertone.ai/voice-builder)** and place the JSON files in the `bin\supertonic\voice_styles\` folder (or set `voice_style_path` in the credentials INI).
 
 Supported languages: English (`en`), Korean (`ko`), German (`de`), Japanese (`ja`), and more. Set the `culture` parameter to the ISO 639-1 language code.
+
+### Edge TTS (free cloud, no API key)
+
+**No API key, no account, no configuration required.** Uses Microsoft Edge's built-in Read Aloud TTS service — the same high-quality neural voices as Azure Cognitive Services, but free and without any signup.
+
+> **⚠️ Unofficial:** This uses a reverse-engineered Microsoft endpoint. It may stop working if Microsoft changes the API. If it breaks, switch to another provider. No SLA or guarantees.
+> **Aliases:** `"edge"` and `"edgetts"` are interchangeable.
+
+```lua
+HoundTTS.Transmit("Bogey, bullseye 270 for 15, angels 25",
+    { freqs = "251.0", coalition = 2, name = "GCI" },
+    { provider = "edge", voice = "en-US-AriaNeural", speed = 1.0 }
+)
+```
+
+Voice defaults are chosen from `culture` + `gender` if `voice` is not set:
+
+- **female** → `{culture}-AriaNeural` (e.g. `en-US-AriaNeural`)
+- **male** → `{culture}-GuyNeural` (e.g. `en-US-GuyNeural`)
+
+Browse all **322 available voices** (142 locales) in [docs/edge-tts-voices.md](docs/edge-tts-voices.md).
 
 ### Azure Cognitive Services
 
@@ -343,7 +385,7 @@ SRS_ENCRYPT          = false          -- global encryption default
 SRS_ENC_KEY          = 0             -- global encryption key
 
 DEFAULT_TRANSMITTER  = "srs"
-DEFAULT_PROVIDER     = "sapi"       -- "piper" | "supertonic" | "sapi" | "azure" | "google" | "elevenlabs" | "openai" | "aws" | "polly"
+DEFAULT_PROVIDER     = "sapi"       -- "piper" | "supertonic" | "sapi" | "edge" | "azure" | "google" | "elevenlabs" | "openai" | "aws" | "polly"
 DEFAULT_VOICE        = ""            -- default voice/model name
 DEFAULT_CULTURE      = "en-US"       -- default culture/locale
 DEFAULT_GENDER       = "female"      -- "male" | "female"
@@ -533,16 +575,16 @@ Flexible API. Not constrained by STTS compatibility. Designed for Piper TTS, enc
 
 **`provider_params`** (table) — which TTS provider to use:
 
-| Field    | Type   | Default                     | Description                                                                                                                               |
-| -------- | ------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| provider | string | `HoundTTS.DEFAULT_PROVIDER` | `"piper"` / `"supertonic"` / `"sapi"` (`"win"`) / `"azure"` / `"google"` (`"gcloud"`) / `"elevenlabs"` / `"openai"` / `"polly"` (`"aws"`) |
-| voice    | string | `HoundTTS.DEFAULT_VOICE`    | Piper model name, Supertonic voice style name (e.g. `M1`, `F1`), SAPI voice name, Azure/Google/Polly voice name, or ElevenLabs voice ID   |
-| speaker  | string | `""`                        | Piper multi-speaker model: speaker name or numeric ID                                                                                     |
-| engine   | string | `"standard"`                | Polly engine: `"standard"` / `"neural"` / `"generative"`                                                                                  |
-| culture  | string | `HoundTTS.DEFAULT_CULTURE`  | BCP-47 locale e.g. `"en-US"`, `"en-GB"` (used by SAPI, Azure, Google)                                                                     |
-| gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                                              |
-| speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                                                          |
-| volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                                                            |
+| Field    | Type   | Default                     | Description                                                                                                                                                        |
+| -------- | ------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| provider | string | `HoundTTS.DEFAULT_PROVIDER` | `"piper"` / `"supertonic"` / `"sapi"` (`"win"`) / `"edge"` (`"edgetts"`) / `"azure"` / `"google"` (`"gcloud"`) / `"elevenlabs"` / `"openai"` / `"polly"` (`"aws"`) |
+| voice    | string | `HoundTTS.DEFAULT_VOICE`    | Piper model name, Supertonic voice style name (e.g. `M1`, `F1`), SAPI voice name, Edge/Azure/Google/Polly voice name, or ElevenLabs voice ID                       |
+| speaker  | string | `""`                        | Piper multi-speaker model: speaker name or numeric ID                                                                                                              |
+| engine   | string | `"standard"`                | Polly engine: `"standard"` / `"neural"` / `"generative"`                                                                                                           |
+| culture  | string | `HoundTTS.DEFAULT_CULTURE`  | BCP-47 locale e.g. `"en-US"`, `"en-GB"` (used by SAPI, Azure, Google)                                                                                              |
+| gender   | string | `HoundTTS.DEFAULT_GENDER`   | `"male"` / `"female"` (used by SAPI, Google)                                                                                                                       |
+| speed    | number | `1.0`                       | Speech rate (0.5 = half speed, 1.0 = normal, 2.0 = double speed)                                                                                                   |
+| volume   | number | `1.0`                       | Output level: 0.0 = silence, 1.0 = full volume                                                                                                                     |
 
 **`translation_params`** (table, optional) — translate before TTS:
 
@@ -566,6 +608,7 @@ When provided, the message is translated **before** being sent to the TTS engine
 | `"srs"`       | `"elevenlabs"` | Direct SRS + ElevenLabs WebSocket                                                                                                                                                             |
 | `"srs"`       | `"aws"`        | Direct SRS + AWS Polly (`"polly"` alias)                                                                                                                                                      |
 | `"srs"`       | `"openai"`     | Direct SRS + OpenAI / LocalAI / Kitten TTS Server HTTP REST                                                                                                                                   |
+| `"srs"`       | `"edge"`       | Direct SRS + Microsoft Edge Read Aloud (free cloud, no API key). Uses same neural voices as Azure.                                                                                            |
 
 Returns: `speechTime` (number — estimated speech duration in seconds), `sessionId` (string — for use with `UpdateSession` / `KillSession`).
 
@@ -908,11 +951,13 @@ src/
 ├── dllmain.cpp          # Lua C bindings, MakeBackend() factory
 ├── backend.h            # ITTSBackend interface + TTSRequest struct
 ├── config_reader.*      # INI parser singleton (reads HoundTTS-credentials.ini)
-├── opus_encoder.*       # libopus streaming encoder
-├── audio_queue.h        # Thread-safe Opus frame queue
+├── audio_queue.h        # Thread-safe Opus frame queue (used by codecs + backends)
 ├── process_launcher.*   # Async CreateProcess wrapper
 ├── speech_time.h        # Speech time estimation
 ├── utils.h              # String/path/registry helpers
+├── codecs/
+│   ├── opus_encoder.*   # libopus streaming encoder (16kHz mono → 40ms Opus frames)
+│   └── mp3_decoder.*    # minimp3 MP3 decoder (24kHz MP3 → 16kHz mono PCM, stateful)
 ├── backends/
 │   └── srs/
 │       ├── srs_backend.*  # Direct SRS backend (TCP/UDP protocol)
@@ -930,6 +975,9 @@ src/
     │   │   └── azure_tts.*        # Azure Cognitive Services REST API
     │   ├── elevenlabs/
     │   │   └── elevenlabs_tts.*   # ElevenLabs WebSocket streaming API
+    │   ├── edge/
+    │   │   ├── edge_tts.*         # Edge TTS WebSocket API (24kHz MP3 → 16kHz PCM)
+    │   │   └── edge_drm.*         # Edge TTS DRM token generation
     │   ├── google/
     │   │   └── google_tts.*       # Google Cloud TTS REST API
     │   ├── kitten/
@@ -940,13 +988,19 @@ src/
     │   │   └── piper_tts.*        # In-process piper.dll synthesis (deprecated piper.exe fallback)
     │   ├── aws/
     │   │   └── aws_tts.*          # AWS Polly REST API
-    │   └── sapi/
-    │       └── sapi_tts.*         # Windows SAPI 5.4 (ISpVoice, MSVC only)
+    │   ├── sapi/
+    │   │   └── sapi_tts.*         # Windows SAPI 5.4 (ISpVoice, MSVC only)
+    │   └── supertonic/
+    │       └── supertonic_tts.*   # Supertonic ONNX TTS (multilingual)
     └── translate/
         ├── google/
         │   └── google_translate.*      # Google Cloud Translation API v2
         ├── libretranslate/
         │   └── libretranslate.*        # LibreTranslate REST API (self-hosted)
+        ├── aws/
+        │   └── aws_translate.*         # AWS Translate API
+        ├── azure/
+        │   └── azure_translate.*       # Azure Translator API
         └── openai/
             └── openai_chat.*           # OpenAI chat completions API (translation)
 ```

@@ -69,6 +69,9 @@ public:
     int         GetSupertonicThreads() const;
     int         GetSupertonicMaxConcurrent() const;
 
+    // [Edge]
+    int GetEdgeBufferMs() const;  // pre-buffer before streaming (default 200)
+
     // [Discord]
     std::string GetDiscordToken() const;
 
@@ -119,6 +122,7 @@ private:
     float       supertonicSpeed_      = 1.05f;
     int         supertonicThreads_    = 4;
     int         supertonicMaxConcurrent_ = 2;
+    int         edgeBufferMs_ = 200;
     std::string discordToken_;
     std::string logLevel_;
     bool cacheEnabled_ = true;

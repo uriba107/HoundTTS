@@ -66,7 +66,7 @@ add_library(HoundTTS SHARED
     src/utils.cpp
     src/backends/pcm_cache.cpp
     src/process_launcher.cpp
-    src/backends/codecs/opus_encoder.cpp
+    src/codecs/opus_encoder.cpp
     # Generators
     src/providers/generators/tone.cpp
     src/providers/generators/noise.cpp
@@ -89,6 +89,9 @@ add_library(HoundTTS SHARED
     src/providers/tts/kitten/kitten_tts.cpp
     src/providers/tts/openai/openai_tts.cpp
     src/providers/tts/supertonic/supertonic_tts.cpp
+    src/providers/tts/edge/edge_tts.cpp
+    src/providers/tts/edge/edge_drm.cpp
+    src/codecs/mp3_decoder.cpp
     # Translation providers
     src/providers/translate/openai/openai_chat.cpp
     src/providers/translate/google/google_translate.cpp
