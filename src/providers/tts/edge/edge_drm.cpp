@@ -9,8 +9,7 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
-
-#include "utils.h"
+#include <stdexcept>
 
 namespace HoundTTS {
 
@@ -86,16 +85,16 @@ std::string EdgeDRM::GenerateMuid() {
 std::string EdgeDRM::BuildWebSocketUrl(const std::string& connectionId) {
     // Validate format: exactly 32 uppercase hex chars — URL-safe, no encoding needed.
     if (connectionId.size() != 32) {
-        Logger::Instance().Error("EdgeDRM::BuildWebSocketUrl",
-            "connectionId must be 32 chars, got " + std::to_string(connectionId.size()));
-        return {};
+        throw std::invalid_argument(
+            "EdgeDRM::BuildWebSocketUrl: connectionId must be 32 chars, got " +
+            std::to_string(connectionId.size()) + " (\"" + connectionId + "\")");
     }
     for (char c : connectionId) {
         if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
-            Logger::Instance().Error("EdgeDRM::BuildWebSocketUrl",
-                "connectionId contains invalid char '" + std::string(1, c) +
-                "' (expected uppercase hex A-F, 0-9)");
-            return {};
+            throw std::invalid_argument(
+                "EdgeDRM::BuildWebSocketUrl: connectionId contains invalid char '" +
+                std::string(1, c) + "' (expected uppercase hex A-F, 0-9) in \"" +
+                connectionId + "\"");
         }
     }
     std::string url = "wss://speech.platform.bing.com/consumer/speech/synthesize/"

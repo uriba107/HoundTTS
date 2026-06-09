@@ -22,7 +22,7 @@ $new1 = 'path_ = std::move(uc.path); if (!uc.query.empty()) { path_ += uc.query;
 if ($h.Contains($old1)) {
     $h = $h.Replace($old1, $new1)
     Write-Host "  [OK] Patch 1: query string fix applied"
-} elseif ($h.Contains('path_ += uc.query')) {
+} elseif ($h.Contains('path_ = std::move(uc.path); if (!uc.query.empty()) { path_ += uc.query; }')) {
     Write-Host "  [OK] Patch 1: already applied (or upstream fixed)"
 } else {
     Write-Error "Patch 1 FAILED: could not find target string. httplib version may have changed."
@@ -36,7 +36,7 @@ $new2 = 'if (port == 80 || port == 443) { req_str += "Host: " + host + "\r\n"; }
 if ($h.Contains($old2)) {
     $h = $h.Replace($old2, $new2)
     Write-Host "  [OK] Patch 2: Host header default-port fix applied"
-} elseif ($h.Contains('port == 80 || port == 443) { req_str')) {
+} elseif ($h.Contains('if (port == 80 || port == 443) { req_str += "Host: " + host + "\r\n"; } else { req_str += "Host: " + host + ":" + std::to_string(port) + "\r\n"; }')) {
     Write-Host "  [OK] Patch 2: already applied (or upstream fixed)"
 } else {
     Write-Error "Patch 2 FAILED: could not find target string. httplib version may have changed."
@@ -47,11 +47,11 @@ if ($h.Contains($old2)) {
 
 # --- Verify ---
 $verify = [System.IO.File]::ReadAllText($f)
-if (-not $verify.Contains('path_ += uc.query')) {
+if (-not $verify.Contains('path_ = std::move(uc.path); if (!uc.query.empty()) { path_ += uc.query; }')) {
     Write-Error "VERIFY FAILED: Patch 1 not present in output"
     exit 1
 }
-if (-not $verify.Contains('port == 80 || port == 443) { req_str')) {
+if (-not $verify.Contains('if (port == 80 || port == 443) { req_str += "Host: " + host + "\r\n"; } else { req_str += "Host: " + host + ":" + std::to_string(port) + "\r\n"; }')) {
     Write-Error "VERIFY FAILED: Patch 2 not present in output"
     exit 1
 }
