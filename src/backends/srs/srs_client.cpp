@@ -26,6 +26,36 @@ static void LogE(const std::string& msg) { Logger::Instance().Error(kTag, msg); 
 static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
 
 // ---------------------------------------------------------------------------
+// DNS resolution helper — accepts hostname or IPv4 dotted-quad
+// ---------------------------------------------------------------------------
+static bool ResolveAddress(const std::string& host, int port, sockaddr_in& addr) {
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(static_cast<u_short>(port));
+
+    // Fast path: already a dotted-quad IPv4
+    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) == 1)
+        return true;
+
+    // DNS lookup (A record only)
+    struct addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    struct addrinfo* result = nullptr;
+    int ret = getaddrinfo(host.c_str(), nullptr, &hints, &result);
+    if (ret != 0 || !result) {
+        LogE("getaddrinfo failed host=" + host + " err=" + std::to_string(ret));
+        return false;
+    }
+
+    auto* sa = reinterpret_cast<sockaddr_in*>(result->ai_addr);
+    addr.sin_addr = sa->sin_addr;
+    freeaddrinfo(result);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // SRS protocol constants
 // ---------------------------------------------------------------------------
 static const char* kSRSVersion = "2.1.0.2";
@@ -150,9 +180,12 @@ bool SRSClient::Connect(const std::string& host, int port) {
     }
 
     sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(static_cast<u_short>(port));
-    inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+    if (!ResolveAddress(host, port, addr)) {
+        LogE("TCP resolve failed host=" + host + " port=" + std::to_string(port));
+        closesocket(m_tcp);
+        m_tcp = INVALID_SOCKET;
+        return false;
+    }
 
     if (connect(m_tcp, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         LogE("TCP connect() failed host=" + host + " port=" + std::to_string(port) +
@@ -205,9 +238,10 @@ void SRSClient::SendPing() {
     std::vector<uint8_t> ping(m_guid.begin(), m_guid.end());
 
     sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(static_cast<u_short>(m_port));
-    inet_pton(AF_INET, m_host.c_str(), &addr.sin_addr);
+    if (!ResolveAddress(m_host, m_port, addr)) {
+        LogE("SendPing resolve failed host=" + m_host + " port=" + std::to_string(m_port));
+        return;
+    }
 
     sendto(m_udp,
            reinterpret_cast<const char*>(ping.data()),
@@ -244,9 +278,11 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
 
     // Set up UDP destination
     sockaddr_in udpAddr{};
-    udpAddr.sin_family = AF_INET;
-    udpAddr.sin_port   = htons(static_cast<u_short>(m_port));
-    inet_pton(AF_INET, m_host.c_str(), &udpAddr.sin_addr);
+    if (!ResolveAddress(m_host, m_port, udpAddr)) {
+        LogE("StreamFromQueue resolve failed host=" + m_host + " port=" + std::to_string(m_port));
+        queue->MarkDone();
+        return;
+    }
 
     // Send initial UDP ping so the server knows we exist
     sendto(m_udp,
@@ -433,9 +469,10 @@ std::vector<uint8_t> SRSClient::BuildVoicePacket(
 
 void SRSClient::SendUDP(const std::vector<uint8_t>& data) {
     sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(static_cast<u_short>(m_port));
-    inet_pton(AF_INET, m_host.c_str(), &addr.sin_addr);
+    if (!ResolveAddress(m_host, m_port, addr)) {
+        LogE("SendUDP resolve failed host=" + m_host + " port=" + std::to_string(m_port));
+        return;
+    }
     sendto(m_udp,
            reinterpret_cast<const char*>(data.data()),
            static_cast<int>(data.size()),
