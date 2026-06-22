@@ -280,7 +280,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     sockaddr_in udpAddr{};
     if (!ResolveAddress(m_host, m_port, udpAddr)) {
         LogE("StreamFromQueue resolve failed host=" + m_host + " port=" + std::to_string(m_port));
-        queue->MarkDone();
+        queue.MarkDone();
         return;
     }
 
