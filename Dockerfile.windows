@@ -60,21 +60,21 @@ RUN powershell -NoProfile -Command \
 
 # vcpkg — classic mode install (no vcpkg.json manifest; version pinned via VCPKG_TAG)
 # Install packages — versions determined by the pinned vcpkg tag's built-in baseline
-ARG VCPKG_TAG=2026.03.18
+ARG VCPKG_TAG=2026.06.01
 RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
     C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics && \
     C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static nlohmann-json:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
-ARG HTTPLIB_VERSION=v0.43.1
+ARG HTTPLIB_VERSION=v0.48.0
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
      -OutFile 'C:\deps\include\httplib.h'"
 
-# Patch httplib WebSocket bugs (see docs/httplib-ws-query-bug.md):
-#   1. WebSocketClient drops query string from URL (RFC 6455 §4.1)
-#   2. Host header always includes :port, even for default 80/443 (RFC 7230 §5.4)
+# Patch httplib WebSocket bug: Host header always includes :port,
+# even for default 80/443 (RFC 7230 §5.4). The query-string bug was
+# fixed upstream as of v0.48.0.
 COPY tools/patch_httplib.ps1 C:/tools/
 RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_httplib.ps1
 
