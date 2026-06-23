@@ -4,6 +4,10 @@
 
 Native C++ DLL for DCS World that replaces DCS-SimpleTextToSpeech. Exposes TTS, noise/tone generation, and translation to Lua mission scripts. Transmits directly into SRS (SimpleRadioStandalone) over TCP/UDP.
 
+## Coding guidelines
+
+Follow [`PONYTAIL.md`](PONYTAIL.md) — lazy senior dev mode. Read before writing code.
+
 ## Build (Windows-only, MSVC)
 
 ```powershell
