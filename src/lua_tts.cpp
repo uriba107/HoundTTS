@@ -157,17 +157,19 @@ int l_textToSpeech(lua_State* L) {
     req.message     = message;
 
     // Transmission params (arg 2)
-    req.srsHost     = GetTableString(L, 2, "host",        "localhost");
-    req.srsPort     = GetTableInt   (L, 2, "port",        5002);
-    req.freqs       = GetTableString(L, 2, "freqs",       "251");
-    req.modulations = GetTableString(L, 2, "modulations", "AM");
-    req.coalition   = GetTableInt   (L, 2, "coalition",   0);
-    req.name        = GetTableString(L, 2, "name",        "HoundTTS");
-    req.encrypt     = GetTableBool  (L, 2, "encrypt",     false);
-    req.encKey      = GetTableInt   (L, 2, "encKey",      0);
-    req.lat         = GetTableNumber(L, 2, "lat",         91.0);
-    req.lon         = GetTableNumber(L, 2, "lon",         181.0);
-    req.alt         = GetTableNumber(L, 2, "alt",         -500.0);
+    req.srsHost          = GetTableString(L, 2, "host",               "localhost");
+    req.srsPort          = GetTableInt   (L, 2, "port",               5002);
+    req.freqs            = GetTableString(L, 2, "freqs",              "251");
+    req.modulations      = GetTableString(L, 2, "modulations",        "AM");
+    req.coalition        = GetTableInt   (L, 2, "coalition",          0);
+    req.name             = GetTableString(L, 2, "name",               "HoundTTS");
+    req.encrypt          = GetTableBool  (L, 2, "encrypt",            false);
+    req.encKey           = GetTableInt   (L, 2, "encKey",             0);
+    req.srsBluePassword  = GetTableString(L, 2, "srs_blue_password",  "");
+    req.srsRedPassword   = GetTableString(L, 2, "srs_red_password",   "");
+    req.lat              = GetTableNumber(L, 2, "lat",                91.0);
+    req.lon              = GetTableNumber(L, 2, "lon",                181.0);
+    req.alt              = GetTableNumber(L, 2, "alt",                -500.0);
 
     // Provider params (arg 3)
     req.provider    = provider;  // enum
@@ -202,18 +204,20 @@ int l_textToSpeech(lua_State* L) {
 
     // Build TransmitParams from the request (pure routing — no TTS logic)
     HoundTTS::TransmitParams txParams;
-    txParams.host        = req.srsHost.empty() ? "127.0.0.1" : req.srsHost;
-    txParams.port        = req.srsPort;
-    txParams.freqs       = req.freqs;
-    txParams.modulations = req.modulations;
-    txParams.encrypt     = req.encrypt;
-    txParams.encKey      = static_cast<uint8_t>(req.encKey);
-    txParams.coalition   = req.coalition;
-    txParams.name        = req.name;
-    txParams.lat         = req.lat;
-    txParams.lon         = req.lon;
-    txParams.alt         = req.alt;
-    txParams.session     = session;
+    txParams.host            = req.srsHost.empty() ? "127.0.0.1" : req.srsHost;
+    txParams.port            = req.srsPort;
+    txParams.freqs           = req.freqs;
+    txParams.modulations     = req.modulations;
+    txParams.encrypt         = req.encrypt;
+    txParams.encKey          = static_cast<uint8_t>(req.encKey);
+    txParams.coalition       = req.coalition;
+    txParams.name            = req.name;
+    txParams.srsBluePassword = req.srsBluePassword;
+    txParams.srsRedPassword  = req.srsRedPassword;
+    txParams.lat             = req.lat;
+    txParams.lon             = req.lon;
+    txParams.alt             = req.alt;
+    txParams.session         = session;
 
     // Shared PCM queue: pipeline produces, backend consumes
     auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
@@ -311,17 +315,19 @@ int l_startNoise(lua_State* L) {
     luaL_checktype(L, 2, LUA_TTABLE);  // noiseParams
 
     // Transmission params
-    std::string transmitter = GetTableString(L, 1, "transmitter", "srs");
-    std::string host        = GetTableString(L, 1, "host",        "localhost");
-    int         port        = GetTableInt   (L, 1, "port",        5002);
-    std::string freqs       = GetTableString(L, 1, "freqs",       "251.0");
-    std::string modulations = GetTableString(L, 1, "modulations", "AM");
-    int         coalition   = GetTableInt   (L, 1, "coalition",   0);
-    std::string name        = GetTableString(L, 1, "name",        "HoundTTS-Jammer");
+    std::string transmitter       = GetTableString(L, 1, "transmitter",       "srs");
+    std::string host              = GetTableString(L, 1, "host",              "localhost");
+    int         port              = GetTableInt   (L, 1, "port",              5002);
+    std::string freqs             = GetTableString(L, 1, "freqs",             "251.0");
+    std::string modulations       = GetTableString(L, 1, "modulations",       "AM");
+    int         coalition         = GetTableInt   (L, 1, "coalition",         0);
+    std::string name              = GetTableString(L, 1, "name",              "HoundTTS-Jammer");
+    std::string srsBluePassword   = GetTableString(L, 1, "srs_blue_password", "");
+    std::string srsRedPassword    = GetTableString(L, 1, "srs_red_password",  "");
     // encrypt/encKey intentionally not read from Lua — noise is never encrypted
-    double      lat         = GetTableNumber(L, 1, "lat",         91.0);
-    double      lon         = GetTableNumber(L, 1, "lon",         181.0);
-    double      alt         = GetTableNumber(L, 1, "alt",         -500.0);
+    double      lat               = GetTableNumber(L, 1, "lat",               91.0);
+    double      lon               = GetTableNumber(L, 1, "lon",               181.0);
+    double      alt               = GetTableNumber(L, 1, "alt",               -500.0);
 
     // Noise params
     std::string noiseType  = GetTableString(L, 2, "noiseType",  "white");
@@ -359,18 +365,20 @@ int l_startNoise(lua_State* L) {
 
     // Build TransmitParams
     HoundTTS::TransmitParams txParams;
-    txParams.host        = host.empty() ? "127.0.0.1" : host;
-    txParams.port        = port;
-    txParams.freqs       = expandedFreqs;
-    txParams.modulations = expandedMods;
-    txParams.encrypt     = false;  // noise is never encrypted (encryption would just garble the noise)
-    txParams.encKey      = 0;
-    txParams.coalition   = coalition;
-    txParams.name        = name;
-    txParams.lat         = lat;
-    txParams.lon         = lon;
-    txParams.alt         = alt;
-    txParams.session     = session;
+    txParams.host            = host.empty() ? "127.0.0.1" : host;
+    txParams.port            = port;
+    txParams.freqs           = expandedFreqs;
+    txParams.modulations     = expandedMods;
+    txParams.encrypt         = false;  // noise is never encrypted (encryption would just garble the noise)
+    txParams.encKey          = 0;
+    txParams.coalition       = coalition;
+    txParams.name            = name;
+    txParams.srsBluePassword = srsBluePassword;
+    txParams.srsRedPassword  = srsRedPassword;
+    txParams.lat             = lat;
+    txParams.lon             = lon;
+    txParams.alt             = alt;
+    txParams.session         = session;
 
     // Shared PCM queue: noise generator produces, backend consumes
     auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
@@ -406,17 +414,19 @@ int l_startTone(lua_State* L) {
     luaL_checktype(L, 2, LUA_TTABLE);  // toneParams
 
     // Transmission params
-    std::string transmitter = GetTableString(L, 1, "transmitter", "srs");
-    std::string host        = GetTableString(L, 1, "host",        "localhost");
-    int         port        = GetTableInt   (L, 1, "port",        5002);
-    std::string freqs       = GetTableString(L, 1, "freqs",       "251.0");
-    std::string modulations = GetTableString(L, 1, "modulations", "AM");
-    int         coalition   = GetTableInt   (L, 1, "coalition",   0);
-    std::string name        = GetTableString(L, 1, "name",        "HoundTTS-Tone");
+    std::string transmitter       = GetTableString(L, 1, "transmitter",       "srs");
+    std::string host              = GetTableString(L, 1, "host",              "localhost");
+    int         port              = GetTableInt   (L, 1, "port",              5002);
+    std::string freqs             = GetTableString(L, 1, "freqs",             "251.0");
+    std::string modulations       = GetTableString(L, 1, "modulations",       "AM");
+    int         coalition         = GetTableInt   (L, 1, "coalition",         0);
+    std::string name              = GetTableString(L, 1, "name",              "HoundTTS-Tone");
+    std::string srsBluePassword   = GetTableString(L, 1, "srs_blue_password", "");
+    std::string srsRedPassword    = GetTableString(L, 1, "srs_red_password",  "");
     // encrypt/encKey intentionally not read from Lua — tone is never encrypted
-    double      lat         = GetTableNumber(L, 1, "lat",         91.0);
-    double      lon         = GetTableNumber(L, 1, "lon",         181.0);
-    double      alt         = GetTableNumber(L, 1, "alt",         -500.0);
+    double      lat               = GetTableNumber(L, 1, "lat",               91.0);
+    double      lon               = GetTableNumber(L, 1, "lon",               181.0);
+    double      alt               = GetTableNumber(L, 1, "alt",               -500.0);
 
     // Tone params
     double duration = GetTableNumber(L, 2, "duration", 2.0);
@@ -436,18 +446,20 @@ int l_startTone(lua_State* L) {
 
     // Build TransmitParams
     HoundTTS::TransmitParams txParams;
-    txParams.host        = host.empty() ? "127.0.0.1" : host;
-    txParams.port        = port;
-    txParams.freqs       = freqs;
-    txParams.modulations = modulations;
-    txParams.encrypt     = false; // Tone should not be encrypted
-    txParams.encKey      = 0;
-    txParams.coalition   = coalition;
-    txParams.name        = name;
-    txParams.lat         = lat;
-    txParams.lon         = lon;
-    txParams.alt         = alt;
-    txParams.session     = session;
+    txParams.host            = host.empty() ? "127.0.0.1" : host;
+    txParams.port            = port;
+    txParams.freqs           = freqs;
+    txParams.modulations     = modulations;
+    txParams.encrypt         = false; // Tone should not be encrypted
+    txParams.encKey          = 0;
+    txParams.coalition       = coalition;
+    txParams.name            = name;
+    txParams.srsBluePassword = srsBluePassword;
+    txParams.srsRedPassword  = srsRedPassword;
+    txParams.lat             = lat;
+    txParams.lon             = lon;
+    txParams.alt             = alt;
+    txParams.session         = session;
 
     auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
     std::unique_ptr<HoundTTS::ITTSBackend> backend(MakeBackend(transmitter));

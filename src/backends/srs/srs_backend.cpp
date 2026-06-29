@@ -29,6 +29,13 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
     uint32_t    unitId    = static_cast<uint32_t>(params.coalition);
     auto        session   = params.session;  // may be nullptr
 
+    // Select EAM password for the requested coalition
+    std::string eamPassword;
+    if (coalition == 2)
+        eamPassword = params.srsBluePassword;
+    else if (coalition == 1)
+        eamPassword = params.srsRedPassword;
+
     // Create and attach SRS-specific position data to the session
     std::shared_ptr<SRSPositionData> posData;
     if (session) {
@@ -40,7 +47,7 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
     }
 
     std::thread([pcm, host, port, freqs, coalition, name, unitId,
-                 session, posData]() {
+                 session, posData, eamPassword]() {
         // Opus-encode PCM as it arrives from the pipeline
         auto opusQueue = std::make_shared<AudioQueue>();
 
@@ -82,7 +89,7 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
             cleanup();
             return;
         }
-        if (!client.Handshake(coalition, name, freqs)) {
+        if (!client.Handshake(coalition, name, freqs, eamPassword)) {
             LogE("SRS handshake failed");
             client.Disconnect();
             cleanup();

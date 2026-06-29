@@ -61,6 +61,8 @@ HoundTTS.DEFAULT_VOICE       = HoundTTS.DEFAULT_VOICE       or ""
 HoundTTS.DEFAULT_SPEAKER     = HoundTTS.DEFAULT_SPEAKER     or ""
 HoundTTS.DEFAULT_CULTURE     = HoundTTS.DEFAULT_CULTURE     or "en-US"
 HoundTTS.DEFAULT_GENDER      = HoundTTS.DEFAULT_GENDER      or "female"
+HoundTTS.SRS_BLUE_PASSWORD   = HoundTTS.SRS_BLUE_PASSWORD   or ""
+HoundTTS.SRS_RED_PASSWORD    = HoundTTS.SRS_RED_PASSWORD    or ""
 
 -- -------------------------------------------------------------------------
 -- Load DLL before `require` gets sanitized
@@ -263,18 +265,20 @@ function HoundTTS.Transmit(message, transmission_params, provider_params, transl
     local result, sessionId = _dll.textToSpeech(
         message,
         {
-            transmitter = transmitter,
-            host        = host,
-            port        = port,
-            freqs       = freqs,
-            modulations = modulations,
-            coalition   = coalition,
-            name        = name,
-            encrypt     = encrypt,
-            encKey      = encKey,
-            lat         = lat,
-            lon         = lon,
-            alt         = alt,
+            transmitter        = transmitter,
+            host               = host,
+            port               = port,
+            freqs              = freqs,
+            modulations        = modulations,
+            coalition          = coalition,
+            name               = name,
+            encrypt            = encrypt,
+            encKey             = encKey,
+            lat                = lat,
+            lon                = lon,
+            alt                = alt,
+            srs_blue_password  = tp.srs_blue_password or HoundTTS.SRS_BLUE_PASSWORD or "",
+            srs_red_password   = tp.srs_red_password  or HoundTTS.SRS_RED_PASSWORD  or "",
         },
         {
             provider    = provider,
@@ -325,18 +329,20 @@ function HoundTTS.TextToSpeech(message, freqs, modulations, volume, name,
     local result = _dll.textToSpeech(
         message,
         {
-            transmitter = "srs",
-            host        = HoundTTS.SRS_HOST,
-            port        = HoundTTS.SRS_PORT,
-            freqs       = tostring(freqs),
-            modulations = tostring(modulations),
-            coalition   = coalition,
-            name        = name,
-            encrypt     = false,
-            encKey      = 0,
-            lat         = lat,
-            lon         = lon,
-            alt         = alt,
+            transmitter        = "srs",
+            host               = HoundTTS.SRS_HOST,
+            port               = HoundTTS.SRS_PORT,
+            freqs              = tostring(freqs),
+            modulations        = tostring(modulations),
+            coalition          = coalition,
+            name               = name,
+            encrypt            = false,
+            encKey             = 0,
+            lat                = lat,
+            lon                = lon,
+            alt                = alt,
+            srs_blue_password  = HoundTTS.SRS_BLUE_PASSWORD or "",
+            srs_red_password   = HoundTTS.SRS_RED_PASSWORD  or "",
         },
         {
             provider    = provider,
@@ -465,18 +471,20 @@ function HoundTTS.TransmitNoise(transmission_params, provider_params)
 
     local sessionId = _dll.startNoise(
         {
-            transmitter = transmitter,
-            host        = host,
-            port        = port,
-            freqs       = freqs,
-            modulations = modulations,
-            coalition   = coalition,
-            name        = name,
-            encrypt     = encrypt,
-            encKey      = encKey,
-            lat         = lat,
-            lon         = lon,
-            alt         = alt,
+            transmitter        = transmitter,
+            host               = host,
+            port               = port,
+            freqs              = freqs,
+            modulations        = modulations,
+            coalition          = coalition,
+            name               = name,
+            encrypt            = encrypt,
+            encKey             = encKey,
+            lat                = lat,
+            lon                = lon,
+            alt                = alt,
+            srs_blue_password  = tp.srs_blue_password or HoundTTS.SRS_BLUE_PASSWORD or "",
+            srs_red_password   = tp.srs_red_password  or HoundTTS.SRS_RED_PASSWORD  or "",
         },
         noiseParams
     )
@@ -605,18 +613,20 @@ function HoundTTS.TransmitTone(transmission_params, provider_params)
 
     local sessionId = _dll.startTone(
         {
-            transmitter = transmitter,
-            host        = host,
-            port        = port,
-            freqs       = freqs,
-            modulations = modulations,
-            coalition   = coalition,
-            name        = name,
-            encrypt     = encrypt,
-            encKey      = encKey,
-            lat         = lat,
-            lon         = lon,
-            alt         = alt,
+            transmitter        = transmitter,
+            host               = host,
+            port               = port,
+            freqs              = freqs,
+            modulations        = modulations,
+            coalition          = coalition,
+            name               = name,
+            encrypt            = encrypt,
+            encKey             = encKey,
+            lat                = lat,
+            lon                = lon,
+            alt                = alt,
+            srs_blue_password  = tp.srs_blue_password or HoundTTS.SRS_BLUE_PASSWORD or "",
+            srs_red_password   = tp.srs_red_password  or HoundTTS.SRS_RED_PASSWORD  or "",
         },
         { duration = duration, freqHz = freqHz, volume = volume }
     )

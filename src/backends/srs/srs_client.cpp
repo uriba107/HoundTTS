@@ -2,6 +2,7 @@
 #include <opus/opus.h>
 #include "srs_client.h"
 #include "utils.h"
+#include <nlohmann/json.hpp>
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -205,32 +206,112 @@ bool SRSClient::Connect(const std::string& host, int port) {
 }
 
 bool SRSClient::Handshake(int coalition, const std::string& name,
-                           const std::vector<FreqMod>& freqs) {
+                           const std::vector<FreqMod>& freqs,
+                           const std::string& eamPassword) {
     m_coalition = coalition;
     m_name      = name;
     std::string clientInfo = BuildClientInfoJson(coalition, name, freqs);
 
-    // Message type 2 = MessageSync
-    std::ostringstream sync;
-    sync << R"({"Version":")" << kSRSVersion << R"(","MsgType":2,"Client":)"
-         << clientInfo << "}";
-    if (!SendTCP(sync.str())) {
-        LogE("Handshake MsgType=2 send failed");
-        return false;
+    // Send SYNC (MsgType=2)
+    {
+        std::ostringstream sync;
+        sync << R"({"Version":")" << kSRSVersion << R"(","MsgType":2,"Client":)"
+             << clientInfo << "}";
+        if (!SendTCP(sync.str())) {
+            LogE("Handshake MsgType=2 send failed");
+            return false;
+        }
     }
 
-    // Message type 7 = MessageExternalAWACSModePassword (empty password)
-    std::ostringstream awacs;
-    awacs << R"({"Version":")" << kSRSVersion
-          << R"(","MsgType":7,"ExternalAWACSModePassword":"","Client":)"
-          << clientInfo << "}";
-    if (!SendTCP(awacs.str())) {
-        LogE("Handshake MsgType=7 send failed");
-        return false;
+    // Only read server response + attempt EAM password if a password is configured.
+    // Without a password there's nothing to send, so skip the TCP read entirely
+    // to avoid latency on the common case (no EAM).
+    if (!eamPassword.empty()) {
+        std::string syncResponse = ReadLine();
+        if (syncResponse.empty()) {
+            LogI("No SYNC response received (timeout/error) — proceeding without EAM");
+        } else {
+            // Parse server SYNC reply as JSON to check EAM status
+            bool eamEnabled = false;
+            try {
+                auto j = nlohmann::json::parse(syncResponse);
+                auto it = j.find("EXTERNAL_AWACS_MODE");
+                if (it != j.end() && it->is_string())
+                    eamEnabled = (it->get<std::string>() == "true");
+            } catch (...) {
+                LogI("Failed to parse SYNC response — assuming no EAM");
+            }
+
+            if (eamEnabled) {
+                std::ostringstream awacs;
+                awacs << R"({"Version":")" << kSRSVersion
+                      << R"(","MsgType":7,"ExternalAWACSModePassword":")"
+                      << EscapeJsonString(eamPassword) << R"(","Client":)"
+                      << clientInfo << "}";
+                if (!SendTCP(awacs.str())) {
+                    LogE("Handshake MsgType=7 send failed");
+                    return false;
+                }
+
+                std::string pwResponse = ReadLine();
+                if (!pwResponse.empty()) {
+                    bool authOk = false;
+                    try {
+                        auto j = nlohmann::json::parse(pwResponse);
+                        auto it = j.find("Coalition");
+                        if (it != j.end() && it->is_number_integer())
+                            authOk = (it->get<int>() != 0);
+                    } catch (...) {
+                        LogI("Failed to parse EAM response — treating as failed");
+                    }
+                    if (authOk) {
+                        LogI("EAM auth succeeded for coalition=" + std::to_string(coalition));
+                    } else {
+                        LogI("EAM auth failed for coalition=" + std::to_string(coalition));
+                        return false;
+                    }
+                } else {
+                    LogI("No EAM response (timeout/error) — handshake failed");
+                    return false;
+                }
+            } else {
+                LogI("Server does not have EAM enabled — skipping password");
+            }
+        }
     }
 
     LogI("Handshake OK coalition=" + std::to_string(coalition) + " name=" + name);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// ReadLine — read a newline-delimited JSON line from TCP with 2s timeout
+// ---------------------------------------------------------------------------
+std::string SRSClient::ReadLine() {
+    // Set receive timeout (2 seconds)
+    DWORD timeoutMs = 2000;
+    setsockopt(m_tcp, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+
+    std::string line;
+    char ch;
+    while (true) {
+        int n = recv(m_tcp, &ch, 1, 0);
+        if (n <= 0) {
+            // Timeout or error
+            line.clear();
+            break;
+        }
+        if (ch == '\n') break;
+        line.push_back(ch);
+    }
+
+    // Restore infinite timeout (set to 0 = default blocking)
+    timeoutMs = 0;
+    setsockopt(m_tcp, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+
+    return line;
 }
 
 void SRSClient::SendPing() {

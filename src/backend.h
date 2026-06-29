@@ -25,6 +25,8 @@ struct TTSRequest {
     std::string srsHost;        // SRS server hostname/IP (default: localhost)
     bool        encrypt = false;
     int         encKey  = 0;    // Encryption key (0-255)
+    std::string srsBluePassword; // EAM password for blue coalition (2)
+    std::string srsRedPassword;  // EAM password for red coalition (1)
 
     // Content
     std::string message;
@@ -69,6 +71,8 @@ struct TransmitParams {
     uint8_t     encKey     = 0;
     int         coalition  = 0;
     std::string name;           // Transmitter name shown in SRS
+    std::string srsBluePassword; // EAM password for blue coalition (2)
+    std::string srsRedPassword;  // EAM password for red coalition (1)
     double      lat        = 91.0;
     double      lon        = 181.0;
     double      alt        = -500.0;
