@@ -27,9 +27,12 @@ public:
     // Connect TCP + UDP sockets to host:port.
     bool Connect(const std::string& host, int port);
 
-    // Send MessageSync + MessageExternalAWACSModePassword over TCP.
+    // Two-step handshake: send SYNC (MsgType=2), read server response,
+    // conditionally send EAM password if server has EAM enabled.
+    // eamPassword is the password for the desired coalition (empty = don't send).
     bool Handshake(int coalition, const std::string& name,
-                   const std::vector<FreqMod>& freqs);
+                   const std::vector<FreqMod>& freqs,
+                   const std::string& eamPassword = "");
 
     // Send a UDP ping (22-byte GUID) to keep the connection alive.
     void SendPing();
@@ -75,6 +78,10 @@ public:
                                         double lat, double lon, double alt) const;
 
 private:
+    // Read one newline-delimited JSON response from TCP (with 5s timeout).
+    // Returns empty string on error or timeout.
+    std::string ReadLine();
+
     SOCKET      m_tcp       = INVALID_SOCKET;
     SOCKET      m_udp       = INVALID_SOCKET;
     std::string m_host;

@@ -47,6 +47,9 @@ find_package(OpenSSL REQUIRED)
 set(OPENSSL_SSL_LIB OpenSSL::SSL)
 set(OPENSSL_CRYPTO_LIB OpenSSL::Crypto)
 
+# --- nlohmann-json (for parsing SRS handshake replies) ---
+find_package(nlohmann_json REQUIRED)
+
 # --- Version resource (right-click → Properties → Details) ---
 configure_file(
     "${CMAKE_SOURCE_DIR}/src/version.rc.in"
@@ -144,6 +147,7 @@ target_link_libraries(HoundTTS PRIVATE
     ${OPUS_TARGET}
     ${OPENSSL_SSL_LIB}
     ${OPENSSL_CRYPTO_LIB}
+    nlohmann_json::nlohmann_json
     advapi32
     winmm
     ws2_32

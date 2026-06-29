@@ -13,6 +13,13 @@ SRS_PORT    = 5002
 SRS_ENCRYPT = false
 SRS_ENC_KEY = 0
 
+-- SRS EAM (External AWACS Mode) passwords
+-- Required only if your SRS server has --enableEAM active.
+-- HoundTTS will automatically send the correct password for the coalition
+-- you specify in each transmission call.
+SRS_BLUE_PASSWORD = ""
+SRS_RED_PASSWORD  = ""
+
 DEFAULT_TRANSMITTER = "srs"
 
 -- Default TTS provider (used when transmitter = "srs"):
