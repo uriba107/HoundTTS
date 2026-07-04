@@ -78,7 +78,7 @@ public:
                                         double lat, double lon, double alt) const;
 
 private:
-    // Read one newline-delimited JSON response from TCP (with 5s timeout).
+    // Read one newline-delimited JSON response from TCP (with 2s timeout).
     // Returns empty string on error or timeout.
     std::string ReadLine();
 

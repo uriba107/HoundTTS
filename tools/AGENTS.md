@@ -7,7 +7,7 @@ Build scripts, dependency patches, vendored headers, and utility tools for devel
 ## Ownership
 
 - `httplib.h` — Vendored cpp-httplib (single-header HTTP/WS library, OpenSSL support)
-- `patch_httplib.ps1` — Patches httplib for OpenSSL static linking quirks
+
 - `patch_piper.ps1` — Patches piper.dll build artifacts for HoundTTS integration
 - `patch_supertonic.ps1` — Patches supertonic.dll for HoundTTS integration
 - `install.bat` — Windows install script for end users
@@ -18,7 +18,7 @@ Build scripts, dependency patches, vendored headers, and utility tools for devel
 ## Local Contracts
 
 - All patch scripts (`.ps1`) target MSVC builds on Windows
-- `httplib.h` must remain untouched except for HoundTTS-specific patches applied through `patch_httplib.ps1`
+- `httplib.h` must remain untouched; upstream fixes should be handled by bumping `HTTPLIB_VERSION` in `deps.env`
 - `install.bat` copies distribution files into Saved Games directories
 
 ## Work Guidance
