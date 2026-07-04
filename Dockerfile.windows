@@ -72,12 +72,6 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
      -OutFile 'C:\deps\include\httplib.h'"
 
-# Patch httplib WebSocket bug: Host header always includes :port,
-# even for default 80/443 (RFC 7230 §5.4). The query-string bug was
-# fixed upstream as of v0.48.0.
-COPY tools/patch_httplib.ps1 C:/tools/
-RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_httplib.ps1
-
 
 # Pre-download onnxruntime (GitHub release, HTTPS integrity)
 # Place it where libpiper's CMakeLists expects ONNXRUNTIME_DIR
