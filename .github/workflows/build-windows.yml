@@ -16,28 +16,30 @@ env:
   DEPS_IMAGE: ghcr.io/uriba107/houndtts/houndtts-deps-win
 
 jobs:
-  build-windows:
-    name: Windows Docker (MSVC)
+  # ================================================================
+  # Job 1: build-all — build deps once, then all DLLs sequentially
+  #         in the same runner so Docker layer cache reuses deps,
+  #         avoiding pulling the ~15 GB deps image for every target.
+  # ================================================================
+  build-all:
+    name: Build All
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 180
+    outputs:
+      cache-tag: ${{ steps.cache-tag.outputs.TAG }}
+      version: ${{ steps.version.outputs.VERSION }}
 
     steps:
-      # --------------------------------------------------------
-      # 1. Checkout
-      # --------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      # --------------------------------------------------------
-      # 2a. Start Docker daemon (workaround: actions/runner-images#13729)
-      # --------------------------------------------------------
       - name: Start Docker service
         shell: powershell
         run: |
           Start-Service docker
-          # Wait until the daemon is responsive (up to 60 s)
           $timeout = 60
           $timer = [Diagnostics.Stopwatch]::StartNew()
           while ($timer.Elapsed.TotalSeconds -lt $timeout) {
@@ -51,9 +53,6 @@ jobs:
           }
           throw "Docker daemon did not start within $timeout seconds."
 
-      # --------------------------------------------------------
-      # 2b. Verify Docker is running Windows containers
-      # --------------------------------------------------------
       - name: Verify Docker (Windows containers)
         shell: powershell
         run: |
@@ -64,24 +63,15 @@ jobs:
           }
           Write-Host "Docker daemon OS: $os"
 
-      # --------------------------------------------------------
-      # 2c. Derive cache tag from branch name
-      # --------------------------------------------------------
       - name: Derive cache tag
         id: cache-tag
         shell: powershell
-        # Pass the ref through an env var instead of interpolating it directly
-        # into the script body — branch / tag names can contain PowerShell
-        # metacharacters ($, `, ", etc.) and direct interpolation is a script
-        # injection vector.
         env:
           RAW_REF: ${{ github.head_ref || github.ref_name }}
           GITHUB_REF: ${{ github.ref }}
         run: |
           $ref = $env:RAW_REF
           if ($env:GITHUB_REF -like 'refs/tags/*') {
-            # Tag build: resolve the branch the tagged commit lives on so we
-            # reuse that branch's deps cache instead of creating a tag-named one.
             $containing = git branch -r --contains HEAD --format='%(refname:short)' 2>$null |
               ForEach-Object { $_ -replace '^origin/','' } |
               Where-Object { $_ -and $_ -ne 'HEAD' }
@@ -95,19 +85,13 @@ jobs:
             Write-Host "Tag build: using branch '$ref' for cache"
           }
           if ([string]::IsNullOrWhiteSpace($ref)) { $ref = "unknown" }
-          # Sanitize to Docker tag grammar: [a-z0-9._-], must start with alnum.
           $tag = ($ref -replace '[^a-zA-Z0-9._-]', '-').ToLower()
-          # Strip leading non-alnum so the tag starts with an allowed char.
           $tag = $tag -replace '^[^a-z0-9]+', ''
           if ([string]::IsNullOrEmpty($tag)) { $tag = "unknown" }
-          # Docker tag max length is 128 chars.
           if ($tag.Length -gt 128) { $tag = $tag.Substring(0, 128) }
           Write-Host "Cache tag: $tag"
           echo "TAG=$tag" >> $env:GITHUB_OUTPUT
 
-      # --------------------------------------------------------
-      # 3. Log in to ghcr.io and pull/refresh the deps layer cache
-      # --------------------------------------------------------
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
@@ -115,36 +99,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull deps cache image (best-effort)
+      - name: Derive version from tag
+        id: version
+        shell: powershell
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          if ($env:GITHUB_REF -match '^refs/tags/v(.+)$') {
+            $ver = ($Matches[1] -split '-')[0]
+          } else {
+            $ver = "0.0.0"
+          }
+          Write-Host "CMake version: $ver"
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Pre-pull deps cache from main (fallback for new branches)
         shell: powershell
         run: |
-          $tag = "${{ steps.cache-tag.outputs.TAG }}"
-          $actualTag = $tag
-          $pulled = $false
-          $ErrorActionPreference = 'SilentlyContinue'
-          docker pull "${{ env.DEPS_IMAGE }}:${tag}" 2>$null
-          if ($LASTEXITCODE -eq 0) { $pulled = $true }
-          if (-not $pulled -and $tag -ne "main") {
-            docker pull "${{ env.DEPS_IMAGE }}:main" 2>$null
-            if ($LASTEXITCODE -eq 0) { 
-              $pulled = $true
-              $actualTag = "main"
-            }
-          }
-          $ErrorActionPreference = 'Stop'
-          if ($pulled) {
-            $imageId = docker inspect --format='{{.Id}}' "${{ env.DEPS_IMAGE }}:${actualTag}"
-            docker tag $imageId "${{ env.DEPS_IMAGE }}:current"
-          }
-          exit 0
+          docker pull "${{ env.DEPS_IMAGE }}:main" 2>$null | Out-Null
+          Write-Host "Pre-pull done (pull errors ignored - cache-from handles miss)"
 
+      # ----------------------------------------------------------
+      # Step 1: Build & push deps stage (heavy toolchain ~15 GB)
+      #         Subsequent builds in this job reuse local cache.
+      # ----------------------------------------------------------
       - name: Build and push deps stage
         shell: powershell
         run: |
           $tag = "${{ steps.cache-tag.outputs.TAG }}"
-          $buildArgs = @("build", "--isolation=hyperv", "-f", "Dockerfile.windows",
+          $buildArgs = @("build", "-f", "Dockerfile.windows",
             "-t", "${{ env.DEPS_IMAGE }}:${tag}",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
             "--target", "deps")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
@@ -154,45 +140,23 @@ jobs:
           $buildArgs += "."
           docker @buildArgs
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
-          docker tag "${{ env.DEPS_IMAGE }}:${tag}" "${{ env.DEPS_IMAGE }}:current"
-          if ("${{ github.ref }}" -like 'refs/tags/*') {
-            Write-Host "Tag build: skipping deps cache push (would overwrite branch cache '${tag}')."
-          } else {
-            docker push "${{ env.DEPS_IMAGE }}:${tag}"
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "WARNING: could not push deps image (fork PR token?)" -ForegroundColor Yellow
-            }
+          docker push "${{ env.DEPS_IMAGE }}:${tag}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "docker push deps image failed - downstream jobs require the image on GHCR"
           }
 
-      # --------------------------------------------------------
-      # 4a. Derive version from git tag (v1.2.3 → 1.2.3)
-      # --------------------------------------------------------
-      - name: Derive version from tag
-        id: version
-        shell: powershell
-        run: |
-          if ("${{ github.ref }}" -match '^refs/tags/v(.+)$') {
-            # CMake project(VERSION) only accepts numeric x.y.z[.w] — strip pre-release suffix
-            $ver = ($Matches[1] -split '-')[0]
-          } else {
-            $ver = "0.0.0"
-          }
-          Write-Host "CMake version: $ver"
-          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
-
-      # --------------------------------------------------------
-      # 4b. Build the Docker image
-      #     --target output produces the final merged image.
-      # --------------------------------------------------------
-      - name: Build Docker image
+      # ----------------------------------------------------------
+      # Step 2: Build piper stage — deps layer reused from local cache
+      # ----------------------------------------------------------
+      - name: Build piper stage
         shell: powershell
         run: |
           $tag = "${{ steps.cache-tag.outputs.TAG }}"
-          $buildArgs = @("build", "--isolation=hyperv", "-f", "Dockerfile.windows",
-            "-t", "houndtts-builder-msvc",
-            "--target", "output",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
-            "--build-arg", "HOUNDTTS_VERSION=${{ steps.version.outputs.VERSION }}")
+          $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "-t", "houndtts-piper",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--target", "piper")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
             $buildArgs += "--build-arg"
@@ -200,15 +164,12 @@ jobs:
           }
           $buildArgs += "."
           docker @buildArgs
-          if ($LASTEXITCODE -ne 0) { throw "docker build (output) failed" }
+          if ($LASTEXITCODE -ne 0) { throw "docker build (piper) failed" }
 
-      # --------------------------------------------------------
-      # 5. Extract dist from the container
-      # --------------------------------------------------------
-      - name: Extract dist
+      - name: Extract dist/piper-engine + dist/piper-voices
         shell: powershell
         run: |
-          $id = docker create --isolation=hyperv houndtts-builder-msvc
+          $id = docker create --isolation=hyperv houndtts-piper
           try {
             New-Item -ItemType Directory -Force dist | Out-Null
             docker cp "${id}:C:\dist" .
@@ -216,9 +177,77 @@ jobs:
             docker rm $id | Out-Null
           }
 
-      # --------------------------------------------------------
-      # 7. Upload artifacts
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
+      # Step 3: Build supertonic stage — deps layer reused from local cache
+      # ----------------------------------------------------------
+      - name: Build supertonic stage
+        shell: powershell
+        run: |
+          $tag = "${{ steps.cache-tag.outputs.TAG }}"
+          $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "-t", "houndtts-supertonic",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--target", "supertonic")
+          Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
+            $parts = $_ -split '=', 2
+            $buildArgs += "--build-arg"
+            $buildArgs += ($parts[0].Trim() + '=' + $parts[1].Trim())
+          }
+          $buildArgs += "."
+          docker @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw "docker build (supertonic) failed" }
+
+      - name: Extract dist/supertonic-engine
+        shell: powershell
+        run: |
+          $id = docker create --isolation=hyperv houndtts-supertonic
+          try {
+            New-Item -ItemType Directory -Force dist | Out-Null
+            docker cp "${id}:C:\dist" .
+          } finally {
+            docker rm $id | Out-Null
+          }
+
+      # ----------------------------------------------------------
+      # Step 4: Build base-output stage (compiles HoundTTS.dll) —
+      #         deps + build stages reused from local cache
+      # ----------------------------------------------------------
+      - name: Build base-output stage
+        shell: powershell
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          $tag = "${{ steps.cache-tag.outputs.TAG }}"
+          $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "-t", "houndtts-main",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--target", "base-output",
+            "--build-arg", "HOUNDTTS_VERSION=$env:VERSION")
+          Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
+            $parts = $_ -split '=', 2
+            $buildArgs += "--build-arg"
+            $buildArgs += ($parts[0].Trim() + '=' + $parts[1].Trim())
+          }
+          $buildArgs += "."
+          docker @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw "docker build (base-output) failed" }
+
+      - name: Extract dist/base
+        shell: powershell
+        run: |
+          $id = docker create --isolation=hyperv houndtts-main
+          try {
+            New-Item -ItemType Directory -Force dist | Out-Null
+            docker cp "${id}:C:\dist" .
+          } finally {
+            docker rm $id | Out-Null
+          }
+
+      # ----------------------------------------------------------
+      # Step 5: Upload all artifacts for downstream jobs
+      # ----------------------------------------------------------
       - name: Upload dist/base
         uses: actions/upload-artifact@v6
         with:
@@ -247,11 +276,43 @@ jobs:
           path: dist/supertonic-engine/
           if-no-files-found: error
 
-      # --------------------------------------------------------
-      # 8. Create GitHub Release (on tag push only)
-      # --------------------------------------------------------
+  # ================================================================
+  # Job 2: release — assemble zip packages and create GitHub Release
+  #         Only runs on tag pushes (v*).
+  # ================================================================
+  release:
+    name: Release
+    runs-on: windows-2022
+    needs: [build-all]
+    if: startsWith(github.ref, 'refs/tags/')
+    timeout-minutes: 15
+
+    steps:
+      - name: Download base package
+        uses: actions/download-artifact@v6
+        with:
+          name: HoundTTS-windows
+          path: dist/base/
+
+      - name: Download piper-engine
+        uses: actions/download-artifact@v6
+        with:
+          name: HoundTTS-piper-engine-windows
+          path: dist/piper-engine/
+
+      - name: Download piper-voices
+        uses: actions/download-artifact@v6
+        with:
+          name: HoundTTS-piper-voices-windows
+          path: dist/piper-voices/
+
+      - name: Download supertonic-engine
+        uses: actions/download-artifact@v6
+        with:
+          name: HoundTTS-supertonic-engine-windows
+          path: dist/supertonic-engine/
+
       - name: Zip release packages
-        if: startsWith(github.ref, 'refs/tags/')
         shell: powershell
         run: |
           Compress-Archive -Path dist\base\*           -DestinationPath HoundTTS-windows.zip                  -Force
@@ -260,7 +321,6 @@ jobs:
           Compress-Archive -Path dist\supertonic-engine\* -DestinationPath HoundTTS-supertonic-engine-windows.zip -Force
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |

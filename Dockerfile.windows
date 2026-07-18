@@ -13,7 +13,7 @@
 # ============================================================
 # Stage 1: deps — all heavy toolchain installs, no source code
 # ============================================================
-FROM mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2019 AS deps
+FROM mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022 AS deps
 
 SHELL ["cmd", "/S", "/C"]
 
@@ -33,6 +33,9 @@ RUN choco install -y cmake --version %CMAKE_VERSION% --installargs "ADD_CMAKE_TO
     choco install -y unzip --version %UNZIP_VERSION% 
 
 # Visual Studio 2022 Build Tools — MSVC v143 + Windows 10 SDK 19041 (sapi.h, sphelper.h, COM headers)
+# Uses aka.ms redirect (always points to latest VS 2022 Build Tools). Pinned URLs
+# expire — Microsoft rotates content-hashed download links periodically.
+# Component set locked via --add flags; only VCTools workload + SDK needed.
 # Split into two layers to avoid hcsshim ImportLayer failure on large single layers
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile 'C:\vs_buildtools.exe'"
@@ -45,7 +48,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
        '--add','Microsoft.VisualStudio.Component.VC.Tools.x86.x64', \
        '--add','Microsoft.VisualStudio.Component.Windows10SDK.19041'; \
      Remove-Item 'C:\vs_buildtools.exe'; \
-     if ($p.ExitCode -ne 0) { throw \"vs_buildtools.exe exited with code $($p.ExitCode)\" }"
+     if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw \"vs_buildtools.exe exited with code $($p.ExitCode)\" }"
 
 # Ninja build system for parallel compilation
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
@@ -259,20 +262,29 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
     cmake --build C:\build --parallel
 
 # ============================================================
-# Stage 4: output — merge build + piper + dcs into final image
-#           Uses nanoserver (minimal) since we only copy files
+# Stage 4: base-output — package just the base package (DLL + Lua + config)
+#           Independent of piper/supertonic, for parallel CI builds
 # ============================================================
-FROM mcr.microsoft.com/windows/nanoserver:ltsc2022 AS output
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022 AS base-output
 
 # Compiled DLL from build stage
 COPY --from=build C:\\build\\bin\\HoundTTS.dll  C:\\dist\\base\\Mods\\Services\\HoundTTS\\bin\\HoundTTS.dll
 
 # Lua scripts + config from build context
-COPY dcs/Mods/Services/HoundTTS/Scripts/             C:\\dist\\base\\Mods\\Services\\HoundTTS\\Scripts\\
-COPY dcs/Mods/Services/HoundTTS/examples/            C:\\dist\\base\\Mods\\Services\\HoundTTS\\examples\\
+COPY dcs/Mods/Services/HoundTTS/Scripts/             C:/dist/base/Mods/Services/HoundTTS/Scripts
+COPY dcs/Mods/Services/HoundTTS/examples/            C:/dist/base/Mods/Services/HoundTTS/examples
 COPY dcs/Scripts/Hooks/HoundTTS-hook.lua              C:\\dist\\base\\Scripts\\Hooks\\HoundTTS-hook.lua
 COPY dcs/Config/HoundTTS-config.lua.example           C:\\dist\\base\\Config\\HoundTTS.lua.example
 COPY dcs/Config/HoundTTS-credentials.ini.example      C:\\dist\\base\\Config\\HoundTTS-credentials.ini.example
+
+# ============================================================
+# Stage 5: output — merge all packages into final image
+#           Uses nanoserver (minimal) since we only copy files
+# ============================================================
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022 AS output
+
+# Base package from base-output stage
+COPY --from=base-output C:\\dist\\base C:\\dist\\base
 
 # Piper engine + voices from piper stage
 COPY --from=piper C:\\dist\\piper-engine   C:\\dist\\piper-engine
