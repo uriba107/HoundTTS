@@ -19,7 +19,9 @@ $old1_lf   = "synth->session = std::make_unique<Ort::Session>(`n        Ort::Ses
 $old1_crlf = "synth->session = std::make_unique<Ort::Session>(`r`n        Ort::Session(ort_env, model_path_ort, synth->session_options));"
 $new1      = "{ const char* _htenv = std::getenv(`"HOUNDTTS_PIPER_THREADS`"); int _ht = (_htenv && _htenv[0]) ? std::atoi(_htenv) : 4; if (_ht < 1) _ht = 4; synth->session_options.SetIntraOpNumThreads(_ht); }`n    synth->session = std::make_unique<Ort::Session>(`n        Ort::Session(ort_env, model_path_ort, synth->session_options));"
 
-if ($c.Contains($old1_lf)) {
+if ($c.Contains($new1)) {
+    Write-Host "patch1 skipped (already applied)"
+} elseif ($c.Contains($old1_lf)) {
     $c = $c.Replace($old1_lf, $new1)
     Write-Host "patch1 applied (LF)"
 } elseif ($c.Contains($old1_crlf)) {
@@ -33,7 +35,9 @@ if ($c.Contains($old1_lf)) {
 $old2 = 'synth->session->GetOutputNames()'
 $new2 = '[&]() { Ort::AllocatorWithDefaultOptions _a; size_t _n = synth->session->GetOutputCount(); std::vector<std::string> _r; for(size_t _i=0;_i<_n;++_i) _r.push_back(synth->session->GetOutputNameAllocated(_i,_a).get()); return _r; }()'
 
-if ($c.Contains($old2)) {
+if ($c.Contains($new2)) {
+    Write-Host "patch2 skipped (already applied)"
+} elseif ($c.Contains($old2)) {
     $c = $c.Replace($old2, $new2)
     Write-Host "patch2 applied (GetOutputNames → GetOutputNameAllocated)"
 } else {
