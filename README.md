@@ -412,14 +412,10 @@ path =
 ; Path to folder containing .onnx voice model files
 ; Leave blank to use bundled voices\ folder
 voice_path =
-; ONNX intra-op threads per synthesis session (default 4)
-threads = 4
 ; Max concurrent piper synthesizers GLOBALLY (across all voices, default 4).
 ; Excess requests queue instead of spawning unbounded ORT sessions.
-; Tuning rule: max_concurrent x threads <= 2 x physical CPU cores.
-;   8+ cores: max_concurrent=4, threads=4   (16 ORT threads peak)
-;   4-6 cores: max_concurrent=2, threads=4  ( 8 ORT threads peak)
-;   weak box: max_concurrent=1, threads=2
+; Each piper session runs single-threaded (upstream piper1-gpl sets
+; intra-op = 1); max_concurrent caps total ORT worker threads.
 max_concurrent = 4
 
 [Google]

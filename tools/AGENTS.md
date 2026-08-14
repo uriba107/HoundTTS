@@ -8,7 +8,6 @@ Build scripts, dependency patches, vendored headers, and utility tools for devel
 
 - `httplib.h` — Vendored cpp-httplib (single-header HTTP/WS library, OpenSSL support)
 
-- `patch_piper.ps1` — Patches piper.dll build artifacts for HoundTTS integration
 - `patch_supertonic.ps1` — Patches supertonic.dll for HoundTTS integration
 - `install.bat` — Windows install script for end users
 - `generate_lua_lib.bat` — Generates `lua.lib` import library from `lua.dll`
