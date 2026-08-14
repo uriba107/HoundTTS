@@ -146,10 +146,11 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
 
 # Assemble piper-engine dist (DLLs + espeak-ng-data + license — ~16 MB)
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
-    "New-Item -ItemType Directory -Force 'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
-     Copy-Item 'C:\piper1-install\piper.dll'                             'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+    "$ErrorActionPreference = 'Stop'; \
+     New-Item -ItemType Directory -Force 'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper' | Out-Null; \
+     Copy-Item 'C:\piper1-install\lib\piper.dll'                        'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
      Copy-Item 'C:\piper1-install\lib\onnxruntime.dll'                  'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
-     Copy-Item -Recurse 'C:\piper1-install\espeak-ng-data'              'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
+     Copy-Item -Recurse 'C:\piper1-install\share\espeak-ng-data'        'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper'; \
      Copy-Item 'C:\piper1-gpl\COPYING'                                    'C:\dist\piper-engine\Mods\Services\HoundTTS\bin\piper\COPYING'"
 
 # Assemble piper-voices dist (bundled voice models — ~120 MB)

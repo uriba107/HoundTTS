@@ -113,24 +113,52 @@ jobs:
           Write-Host "CMake version: $ver"
           echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
 
-      - name: Pre-pull deps cache from main (fallback for new branches)
+      # ----------------------------------------------------------
+      # Pull the best available deps cache and alias it to the
+      # virtual `:current` tag. Legacy builder (Windows, no BuildKit)
+      # follows only ONE cache-from chain, so all builds in this job
+      # point at `:current` — the freshest matching image — instead
+      # of listing several. Preference: this branch's tag, else main.
+      # ----------------------------------------------------------
+      - name: Pull deps cache (branch tag preferred, main fallback)
         shell: powershell
         run: |
-          docker pull "${{ env.DEPS_IMAGE }}:main" 2>$null | Out-Null
-          Write-Host "Pre-pull done (pull errors ignored - cache-from handles miss)"
+          $tag = "${{ steps.cache-tag.outputs.TAG }}"
+          $actualTag = $tag
+          $pulled = $false
+          $ErrorActionPreference = 'SilentlyContinue'
+          docker pull "${{ env.DEPS_IMAGE }}:${tag}" 2>$null
+          if ($LASTEXITCODE -eq 0) { $pulled = $true }
+          if (-not $pulled -and $tag -ne "main") {
+            docker pull "${{ env.DEPS_IMAGE }}:main" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $pulled = $true
+              $actualTag = "main"
+            }
+          }
+          $ErrorActionPreference = 'Stop'
+          if ($pulled) {
+            docker tag "${{ env.DEPS_IMAGE }}:${actualTag}" "${{ env.DEPS_IMAGE }}:current"
+          }
+          Write-Host "Deps cache: pulled=$pulled (source=$actualTag)"
 
       # ----------------------------------------------------------
       # Step 1: Build & push deps stage (heavy toolchain ~15 GB)
       #         Subsequent builds in this job reuse local cache.
+      #
+      # `:current` is a virtual tag pointing at the best deps cache:
+      # pre-pull above set it to branch-tag or main; after this build
+      # it is re-aliased to the freshly built image so piper/
+      # supertonic/base-output reuse deps without reinstalling.
       # ----------------------------------------------------------
       - name: Build and push deps stage
         shell: powershell
         run: |
           $tag = "${{ steps.cache-tag.outputs.TAG }}"
           $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "--isolation=hyperv",
             "-t", "${{ env.DEPS_IMAGE }}:${tag}",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
             "--target", "deps")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
@@ -140,6 +168,7 @@ jobs:
           $buildArgs += "."
           docker @buildArgs
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
+          docker tag "${{ env.DEPS_IMAGE }}:${tag}" "${{ env.DEPS_IMAGE }}:current"
           docker push "${{ env.DEPS_IMAGE }}:${tag}"
           if ($LASTEXITCODE -ne 0) {
             throw "docker push deps image failed - downstream jobs require the image on GHCR"
@@ -151,11 +180,10 @@ jobs:
       - name: Build piper stage
         shell: powershell
         run: |
-          $tag = "${{ steps.cache-tag.outputs.TAG }}"
           $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "--isolation=hyperv",
             "-t", "houndtts-piper",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
             "--target", "piper")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
@@ -183,11 +211,11 @@ jobs:
       - name: Build supertonic stage
         shell: powershell
         run: |
-          $tag = "${{ steps.cache-tag.outputs.TAG }}"
           $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "--isolation=hyperv",
             "-t", "houndtts-supertonic",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
+            "--cache-from", "houndtts-piper",
             "--target", "supertonic")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
             $parts = $_ -split '=', 2
@@ -218,11 +246,12 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          $tag = "${{ steps.cache-tag.outputs.TAG }}"
           $buildArgs = @("build", "-f", "Dockerfile.windows",
+            "--isolation=hyperv",
             "-t", "houndtts-main",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:main",
-            "--cache-from", "${{ env.DEPS_IMAGE }}:${tag}",
+            "--cache-from", "${{ env.DEPS_IMAGE }}:current",
+            "--cache-from", "houndtts-piper",
+            "--cache-from", "houndtts-supertonic",
             "--target", "base-output",
             "--build-arg", "HOUNDTTS_VERSION=$env:VERSION")
           Get-Content deps.env | Where-Object { $_ -match '^\s*[^#]' -and $_ -match '=' } | ForEach-Object {
