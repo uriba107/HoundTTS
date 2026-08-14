@@ -123,16 +123,9 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 FROM deps AS piper
 
-ARG PIPER1_GPL_TAG=v1.5.0
+ARG PIPER1_GPL_TAG=v1.6.1
 RUN git clone --branch %PIPER1_GPL_TAG% --depth 1 \
     https://github.com/OHF-Voice/piper1-gpl.git C:\piper1-gpl
-
-# Patch piper for onnxruntime 1.22.0 API + DLL-safe init (see patch_piper.ps1)
-# PIPER_PATCH_VER is a cache-buster: bump in deps.env to force this layer to rebuild.
-ARG PIPER_PATCH_VER=20260718
-COPY tools/patch_piper.ps1 C:/tools/
-RUN powershell -NoProfile -ExecutionPolicy Bypass -File C:\tools\patch_piper.ps1
-
 
 # Build libpiper: auto-clones espeak-ng (ExternalProject_Add); use pre-downloaded onnxruntime
 # Phase 1: configure + build espeak-ng only

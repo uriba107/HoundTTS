@@ -1,5 +1,4 @@
 #include "piper_native.h"
-#include "config_reader.h"
 #include "utils.h"
 
 namespace HoundTTS {
@@ -65,14 +64,7 @@ bool PiperNative::Load(const std::string& dllDir) {
 
     available_ = true;
 
-    // Pass configured thread count to piper.dll via env var (read inside patched ORT session init)
-    int threads = ConfigReader::Instance().GetPiperThreads();
-    if (!SetEnvironmentVariableA("HOUNDTTS_PIPER_THREADS", std::to_string(threads).c_str())) {
-        DWORD err = GetLastError();
-        LogE("Failed to set HOUNDTTS_PIPER_THREADS=" + std::to_string(threads) + 
-             " (Win32 error " + std::to_string(err) + ")");
-    }
-    LogI("piper.dll loaded successfully (threads=" + std::to_string(threads) + ")");
+    LogI("piper.dll loaded successfully");
     return true;
 }
 
