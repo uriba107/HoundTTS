@@ -129,7 +129,7 @@ static void ExpandFreqs(const std::string& freqsIn,
 //   .encKey       number
 //   .lat/.lon/.alt numbers (pre-converted by Lua)
 // ep      : table — provider parameters
-//   .provider     "piper"|"azure"|"google"|"elevenlabs"|"aws"|"polly"|"sapi"|"openai"|"edge"|"edgetts"|"kitten"/"kittentts" (deprecated—use "openai")
+//   .provider     "piper"|"azure"|"google"|"elevenlabs"|"aws"|"polly"|"sapi"|"openai"|"edge"|"edgetts"
 //   .voice        string
 //   .speaker      string  (piper multi-speaker only)
 //   .culture      string  e.g. "en-US"
@@ -259,7 +259,7 @@ int l_textToSpeech(lua_State* L) {
 // length:   number (char count) or string
 // speed:    number, default 1
 // provider: string — "sapi"|"google"|"gcloud"|"azure"|"aws"|"polly"|
-//                    "elevenlabs"|"piper"|"openai"|"kittentts"
+//                    "elevenlabs"|"piper"|"openai"
 //           default "sapi".  Boolean coercion (legacy googleTTS) is done
 //           in the Lua wrapper; the DLL always receives a string.
 // Returns:  estimated speech time in seconds

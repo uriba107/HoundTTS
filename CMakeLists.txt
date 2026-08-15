@@ -89,7 +89,6 @@ add_library(HoundTTS SHARED
     src/providers/tts/google/google_tts.cpp
     src/providers/tts/elevenlabs/elevenlabs_tts.cpp
     src/providers/tts/aws/aws_tts.cpp
-    src/providers/tts/kitten/kitten_tts.cpp
     src/providers/tts/openai/openai_tts.cpp
     src/providers/tts/supertonic/supertonic_tts.cpp
     src/providers/tts/edge/edge_tts.cpp

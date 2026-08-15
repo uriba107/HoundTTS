@@ -47,10 +47,6 @@ inline double GetSpeechTime(int length, double speed = 1.0,
         // AWS Polly: SSML prosody rate, clamped 0.2–2.0
         speedFactor = std::max(0.2, std::min(2.0, speed));
         break;
-    case TtsProvider::KittenTTS:
-        // KittenTTS: direct speed multiplier (0.1–4.0)
-        speedFactor = std::max(0.1, std::min(4.0, speed));
-        break;
     case TtsProvider::OpenAI:
         // OpenAI: direct speed multiplier (0.25–4.0)
         speedFactor = std::max(0.25, std::min(4.0, speed));

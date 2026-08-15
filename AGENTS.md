@@ -42,7 +42,7 @@ Follow [`PONYTAIL.md`](PONYTAIL.md) — lazy senior dev mode. Read before writin
 | Backend               | `src/backends/srs/`                 | SRS protocol (TCP handshake + UDP audio)                                      |
 | PCM queue             | `src/backends/pcm_queue.h`          | Thread-safe 16kHz mono int16 blocking queue (producer→consumer)               |
 | PCM cache             | `src/backends/pcm_cache.cpp`        | LRU + TTL PCM cache (16kHz mono, keyed by FNV-1a of TTS params)              |
-| TTS providers         | `src/providers/tts/<name>/`         | piper, supertonic, sapi, azure, google, elevenlabs, aws, openai, edge, kitten |
+| TTS providers         | `src/providers/tts/<name>/`         | piper, supertonic, sapi, azure, google, elevenlabs, aws, openai, edge |
 | Translation providers | `src/providers/translate/<name>/`   | openai, google, libretranslate, aws, azure                                    |
 | Config                | `src/config_reader.cpp`             | Reads `HoundTTS-credentials.ini` from `Config/`                               |
 
@@ -71,14 +71,12 @@ Entrypoint for Lua: `luaopen_HoundTTS` (`dllmain.cpp:48`) — called when DCS `r
 | `"piper"`              | `PiperTTS`             | Bundled GPLv3 DLL, lazy-init, voice registry with fallback             |
 | `"supertonic"`         | `SupertonicTTS`        | Bundled ONNX DLL, ISO 639-1 culture (region stripped)                 |
 | `"edge"` / `"edgetts"` | `EdgeTTS`              | Free — reverse-engineered Bing WebSocket (unofficial, may break)       |
-| `"openai"`             | `OpenAITTS`            | `/v1/audio/speech` always appended to endpoint                         |
-| `"kitten"`             | reroutes to `OpenAITTS`| Deprecated, removed soon — migrate to `openai` with `model=kitten-tts` |
+| `"openai"`             | `OpenAITTS`            | `/v1/audio/speech` always appended to endpoint                          |
 | `"google"` / `"gcloud"`| `GoogleTTS`            | Requires service-account JSON                                          |
 | `"aws"` / `"polly"`    | `AwsTTS`               | Amazon Polly, also handles `"amazon"` alias                            |
 | `"azure"`              | `AzureTTS`             | Azure Cognitive Services Speech                                        |
 | `"elevenlabs"`         | `ElevenLabsTTS`        | Free tier: max 1 concurrent WebSocket                                  |
 
-- `provider = "kitten"` defaults speed to 1.1 instead of 1.0. On migration to `"openai"`, set `speed = 1.1` explicitly.
 - Edge TTS: voice defaults derived from culture+gender (`{culture}-AriaNeural` / `{culture}-GuyNeural`).
 
 ## Version scheme
