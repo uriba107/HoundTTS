@@ -170,6 +170,8 @@ Download additional models from [HuggingFace rhasspy/piper-voices](https://huggi
 
 ### Supertonic (offline, multilingual ONNX)
 
+> **⚠️ Upstream status:** In July 2026, Supertone announced the company was sold and the open-source Supertonic project is being **archived** — [no further development or official support](https://github.com/supertone-inc/supertonic). The bundled models remain fully functional offline and HoundTTS will continue shipping Supertonic v3 for the foreseeable future. However, if critical security issues arise that upstream no longer fixes, Supertonic may be dropped from future releases. Hopefully the community will fork the project and keep improving it — if a maintained fork appears and proves reliable, the fork will be shipped in its place.
+
 **No internet or API key required.** Synthesizes speech in-process via `supertonic.dll` (built from [supertone-inc/supertonic](https://github.com/supertone-inc/supertonic)). Supports **English, Korean, German, Japanese, and more** with high-quality neural voices. Voice styles stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-supertonic-engine-windows.zip` with bundled ONNX models and voice styles.
 
 ```lua
@@ -194,7 +196,7 @@ HoundTTS.Transmit("Bogey, bullseye 270 for 15",
 | `F4`  | Female |
 | `F5`  | Female |
 
-Create custom voice styles at **[supertonic.supertone.ai/voice-builder](https://supertonic.supertone.ai/voice-builder)** and place the JSON files in the `bin\supertonic\voice_styles\` folder (or set `voice_style_path` in the credentials INI).
+Create custom voice styles at **[supertonic.supertone.ai/voice-builder](https://supertonic.supertone.ai/voice-builder)** and place the JSON files in the `bin\supertonic\voice_styles\` folder (or set `voice_style_path` in the credentials INI). Note that Voice Builder will no longer be accessible after **August 31, 2026** — download any style JSONs you want before then.
 
 Supported languages: English (`en`), Korean (`ko`), German (`de`), Japanese (`ja`), and more. Set the `culture` parameter to the ISO 639-1 language code.
 
