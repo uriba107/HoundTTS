@@ -10,7 +10,7 @@ All TTS synthesis and text translation implementations. Each provider lives in i
 
 See `tts/AGENTS.md` for detailed ownership and per-provider specifics.
 
-`tts/` contains: sapi, piper, azure, google, elevenlabs, aws, kitten, openai, supertonic, edge.
+`tts/` contains: sapi, piper, azure, google, elevenlabs, aws, openai, supertonic, edge.
 
 ### Translation Providers (`translate/`)
 

@@ -38,9 +38,6 @@ public:
     std::string GetElevenLabsKey() const;
     std::string GetElevenLabsModelId() const;
 
-    // [KittenTTS]
-    std::string GetKittenEndpoint() const;
-
     // [OpenAI]
     std::string GetOpenAIKey() const;
     std::string GetOpenAIEndpoint() const;
@@ -100,7 +97,6 @@ private:
     std::string azureRegion_;
     std::string elevenLabsKey_;
     std::string elevenLabsModelId_;
-    std::string kittenEndpoint_;
     std::string openaiKey_;
     std::string openaiEndpoint_;
     std::string openaiModel_;

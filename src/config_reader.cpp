@@ -36,7 +36,6 @@ void ConfigReader::Load(const std::string& writedir) {
     azureRegion_.clear();
     elevenLabsKey_.clear();
     elevenLabsModelId_.clear();
-    kittenEndpoint_.clear();
     openaiKey_.clear();
     openaiEndpoint_.clear();
     openaiModel_.clear();
@@ -177,8 +176,6 @@ void ConfigReader::ParseIni(const std::string& content) {
         } else if (section == "ElevenLabs") {
             if (key == "api_key")  elevenLabsKey_     = val;
             if (key == "model_id") elevenLabsModelId_ = val;
-        } else if (section == "KittenTTS") {
-            if (key == "endpoint") kittenEndpoint_ = val;
         } else if (section == "OpenAI") {
             if (key == "api_key")  openaiKey_      = val;
             if (key == "endpoint") openaiEndpoint_ = val;
@@ -284,10 +281,6 @@ std::string ConfigReader::GetElevenLabsKey() const {
 std::string ConfigReader::GetElevenLabsModelId() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return elevenLabsModelId_;
-}
-std::string ConfigReader::GetKittenEndpoint() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return kittenEndpoint_;
 }
 std::string ConfigReader::GetOpenAIKey() const {
     std::lock_guard<std::mutex> lock(mutex_);

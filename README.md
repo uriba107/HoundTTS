@@ -170,7 +170,7 @@ Download additional models from [HuggingFace rhasspy/piper-voices](https://huggi
 
 ### Supertonic (offline, multilingual ONNX)
 
-> **⚠️ Upstream status:** In July 2026, Supertone announced the company was sold and the open-source Supertonic project is being **archived** — [no further development or official support](https://github.com/supertone-inc/supertonic). The bundled models remain fully functional offline and HoundTTS will continue shipping Supertonic v3 for the foreseeable future. However, if critical security issues arise that upstream no longer fixes, Supertonic may be dropped from future releases. Hopefully the community will fork the project and keep improving it — if a maintained fork appears and proves reliable, the fork will be shipped in its place.
+> **⚠️ Upstream status:** In July 2026, Supertone resolved to dissolve the company and enter liquidation — a [dissolution notice](https://www.supertone.ai/en/dissolution-notice) is posted on its website — and the open-source Supertonic project is being **archived** — [no further development or official support](https://github.com/supertone-inc/supertonic). The bundled models remain fully functional offline and HoundTTS will continue shipping Supertonic v3 for the foreseeable future. However, if critical security issues arise that upstream no longer fixes, Supertonic may be dropped from future releases. Hopefully the community will fork the project and keep improving it — if a maintained fork appears and proves reliable, the fork will be shipped in its place.
 
 **No internet or API key required.** Synthesizes speech in-process via `supertonic.dll` (built from [supertone-inc/supertonic](https://github.com/supertone-inc/supertonic)). Supports **English, Korean, German, Japanese, and more** with high-quality neural voices. Voice styles stay loaded between calls — no per-call cold-start. The engine is included in `HoundTTS-supertonic-engine-windows.zip` with bundled ONNX models and voice styles.
 
@@ -265,11 +265,11 @@ HoundTTS.Transmit("Cleared to land",
 )
 ```
 
-### Kitten TTS (self-hosted) ⚠️ Deprecated
+### Kitten TTS (self-hosted) ⚠️ Removed
 
-> **Deprecated:** the dedicated `"kitten"` provider will be removed in the next release. It currently still works — calls are silently rerouted through the OpenAI-compatible endpoint that [Kitten TTS Server](https://github.com/uriba107/Kitten-TTS-Server) exposes (`/v1/audio/speech`). **Migrate now** — see instructions below.
+> **Removed:** the dedicated `"kitten"` provider has been removed. Use `provider = "openai"` with your [Kitten TTS Server](https://github.com/uriba107/Kitten-TTS-Server) as the `[OpenAI]` endpoint — it exposes a standard OpenAI-compatible `/v1/audio/speech` API.
 
-**Migration to `provider = "openai"`:**
+**Migration instructions:**
 
 1. In `HoundTTS-credentials.ini`, set the `[OpenAI]` section to point at your Kitten server:
 
@@ -282,7 +282,7 @@ model    = kitten-tts
 2. In your Lua scripts, change `provider = "kitten"` → `provider = "openai"`:
 
 ```lua
--- Before (deprecated)
+-- Before (removed)
 HoundTTS.Transmit("Cleared to land",
     { freqs = "251.0", coalition = 2 },
     { provider = "kitten", voice = "Bella" }
@@ -297,7 +297,7 @@ HoundTTS.Transmit("Cleared to land",
 
 **Built-in voices:** `Bella`, `Luna`, `Rosie`, `Kiki` (female) · `Jasper`, `Bruno`, `Hugo`, `Leo` (male)
 
-> **Speed note:** the deprecated provider defaulted to `1.1` speed. Set `speed = 1.1` explicitly in `provider_params` if you relied on this.
+> **Speed note:** the removed provider defaulted to `1.1` speed. Set `speed = 1.1` explicitly in `provider_params` if you relied on this.
 
 ### OpenAI (and compatible APIs)
 
@@ -978,8 +978,6 @@ src/
     │   │   └── edge_drm.*         # Edge TTS DRM token generation
     │   ├── google/
     │   │   └── google_tts.*       # Google Cloud TTS REST API
-    │   ├── kitten/
-    │   │   └── kitten_tts.*       # Kitten TTS Server HTTP REST API
     │   ├── openai/
     │   │   └── openai_tts.*       # OpenAI-compatible TTS REST API (+ LocalAI)
     │   ├── piper/
@@ -1011,9 +1009,9 @@ src/
 
 **Kitten TTS dedicated provider removed**
 
-The `"kitten"` / `"kittentts"` / `"kitten_tts"` provider names will be removed. In the current release they still work and log a deprecation warning in `Logs\HoundTTS.log`.
+The `"kitten"` / `"kittentts"` / `"kitten_tts"` provider names are removed. Requests using them now fall back to the unrecognized-provider path (SAPI) and log a warning in `Logs\HoundTTS.log`.
 
-**Action required:** migrate to `provider = "openai"` and point `[OpenAI] endpoint` at your Kitten TTS Server — see the [Kitten TTS section](#kitten-tts-self-hosted--deprecated) above for step-by-step instructions.
+**Action required:** migrate to `provider = "openai"` and point `[OpenAI] endpoint` at your Kitten TTS Server — see the [Kitten TTS section](#kitten-tts-self-hosted-removed) above for step-by-step instructions.
 
 **`piper.exe` subprocess fallback removed**
 

@@ -139,6 +139,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if ($pulled) {
             docker tag "${{ env.DEPS_IMAGE }}:${actualTag}" "${{ env.DEPS_IMAGE }}:current"
+            if ($LASTEXITCODE -ne 0) { throw "docker tag (deps cache) failed" }
           }
           Write-Host "Deps cache: pulled=$pulled (source=$actualTag)"
 
@@ -169,6 +170,7 @@ jobs:
           docker @buildArgs
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
           docker tag "${{ env.DEPS_IMAGE }}:${tag}" "${{ env.DEPS_IMAGE }}:current"
+          if ($LASTEXITCODE -ne 0) { throw "docker tag (deps -> current) failed" }
           docker push "${{ env.DEPS_IMAGE }}:${tag}"
           if ($LASTEXITCODE -ne 0) {
             throw "docker push deps image failed - downstream jobs require the image on GHCR"

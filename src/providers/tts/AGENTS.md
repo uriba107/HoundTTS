@@ -17,7 +17,6 @@ All TTS synthesis implementations. Each provider is a flat directory with 1–4 
 | elevenlabs/ | ElevenLabs WebSocket | Free tier: 1 concurrent WS |
 | aws/ | Amazon Polly REST | Also handles `"amazon"` alias |
 | openai/ | OpenAI / LocalAI / Kitten REST | `/v1/audio/speech` auto-appended |
-| kitten/ | Deprecated — reroutes through OpenAI | Removed soon |
 
 ## Local Contracts
 
@@ -36,13 +35,11 @@ All TTS synthesis implementations. Each provider is a flat directory with 1–4 
 | `"supertonic"` | `SupertonicTTS` | Bundled ONNX DLL, ISO 639-1 culture (region stripped) |
 | `"edge"` / `"edgetts"` | `EdgeTTS` | Free — reverse-engineered Bing WebSocket (unofficial, may break) |
 | `"openai"` | `OpenAITTS` | `/v1/audio/speech` always appended to endpoint |
-| `"kitten"` | reroutes to `OpenAITTS` | Deprecated, removed soon |
 | `"google"` / `"gcloud"` | `GoogleTTS` | Requires service-account JSON |
 | `"aws"` / `"polly"` | `AwsTTS` | Amazon Polly, also handles `"amazon"` alias |
 | `"azure"` | `AzureTTS` | Azure Cognitive Services Speech |
 | `"elevenlabs"` | `ElevenLabsTTS` | Free tier: max 1 concurrent WebSocket |
 
-- `provider = "kitten"` defaults speed to 1.1 instead of 1.0. On migration to `"openai"`, set `speed = 1.1` explicitly.
 - Edge TTS: voice defaults derived from culture+gender (`{culture}-AriaNeural` / `{culture}-GuyNeural`).
 
 ## Work Guidance

@@ -112,7 +112,6 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
     std::string awsSecretKey    = cfg.GetAwsSecretKey();
     std::string awsRegion       = cfg.GetAwsRegion();
     std::string awsPollyEngine  = req.awsPollyEngine.empty() ? cfg.GetAwsPollyEngine() : req.awsPollyEngine;
-    std::string kittenEndpoint  = cfg.GetKittenEndpoint();
     std::string openaiKey       = cfg.GetOpenAIKey();
     std::string openaiEndpoint  = cfg.GetOpenAIEndpoint();
     std::string openaiModel     = cfg.GetOpenAIModel();
@@ -276,18 +275,6 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
                                             awsRegion, voice, awsPollyEngine,
                                             culture, gender, speed, volume, *dispatchQueue);
         finalizeCache(ok);
-
-    } else if (provider == TtsProvider::KittenTTS) {
-        // DEPRECATED: reroutes through OpenAI-compatible endpoint
-        LogE("[DEPRECATED] Kitten TTS provider will be removed in the next release. "
-             "Use provider=\"openai\" with your Kitten TTS Server URL as [OpenAI] endpoint "
-             "and model=kitten-tts. See README for migration instructions.");
-        double kittenSpeed = (speed <= 0.0) ? 1.1 : speed;
-        std::thread([message, kittenEndpoint, voice, kittenSpeed, volume, dispatchQueue, finalizeCache]() {
-            bool ok = OpenAITTS::SynthesizeToQueue(message, kittenEndpoint, "",
-                                                   "kitten-tts", voice, kittenSpeed, volume, *dispatchQueue);
-            finalizeCache(ok);
-        }).detach();
 
     } else if (provider == TtsProvider::OpenAI) {
         std::thread([message, openaiEndpoint, openaiKey, openaiModel, voice, speed, volume, dispatchQueue, finalizeCache]() {
