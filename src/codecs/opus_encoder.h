@@ -36,6 +36,11 @@ public:
 
     ~OpusFrameEncoder();
 
+    // Declaring the deleted copy operations below suppresses the implicit
+    // default constructor, so restate it: the encoder is default-constructed
+    // on the Opus worker thread and configured by Init().
+    OpusFrameEncoder() = default;
+
     // Owns a raw OpusEncoder*: copying would double-free it.
     OpusFrameEncoder(const OpusFrameEncoder&) = delete;
     OpusFrameEncoder& operator=(const OpusFrameEncoder&) = delete;
