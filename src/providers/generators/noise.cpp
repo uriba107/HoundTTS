@@ -21,6 +21,18 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
     static const int   kChunkFrames = kSampleRate;   // 1 second per chunk
     static const float k2Pi         = 2.0f * 3.14159265f;
 
+    if (!queue) {
+        Logger::Instance().Error("HoundTTS/Noise", "Null PCM queue; aborting noise generation");
+        return;
+    }
+
+    // Completion is signalled on every exit path — including an exception from
+    // Push()/allocation — otherwise a consumer blocked in PCMQueue::Pop() hangs.
+    struct MarkDoneGuard {
+        PCMQueue* q;
+        ~MarkDoneGuard() { if (q) q->MarkDone(); }
+    } doneGuard{queue.get()};
+
     // Validate duration: NaN or Inf would cause undefined behaviour in the
     // float→int conversion below, so coerce to a safe fallback.
     if (!std::isfinite(duration)) {
@@ -255,8 +267,7 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
             }
         }
     }
-
-    queue->MarkDone();
+    // MarkDone is delivered by doneGuard on scope exit.
 }
 
 } // namespace HoundTTS

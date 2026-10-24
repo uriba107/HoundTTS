@@ -166,10 +166,21 @@ public:
                                 std::vector<float>& out_pcm,
                                 int& out_sample_rate) {
         std::unique_lock<std::shared_mutex> writeLock(styleMutex_);
-        if (stylePath != cachedStylePath_) {
+        // Snapshot the context under ctxMutex_ (lock order: styleMutex_ ->
+        // ctxMutex_) so a concurrent EnsureContext()/reassignment cannot be
+        // observed mid-use. The pointer is stable for the pool's lifetime.
+        supertonic_context* ctx;
+        {
             std::lock_guard<std::mutex> ctxLock(ctxMutex_);
+            ctx = ctx_;
+        }
+        if (!ctx) {
+            LogE("supertonic context not initialised");
+            return SUPERTONIC_ERR;
+        }
+        if (stylePath != cachedStylePath_) {
             int rc = SupertonicNative::Instance().LoadStyle(
-                ctx_, stylePath.c_str());
+                ctx, stylePath.c_str());
             if (rc != SUPERTONIC_OK) {
                 LogE("supertonic_load_style failed: " + stylePath);
                 return rc;
@@ -178,7 +189,7 @@ public:
         }
         supertonic_audio_chunk chunk{};
         int rc = SupertonicNative::Instance().Synthesize(
-            ctx_, text, lang, steps, speed, &chunk);
+            ctx, text, lang, steps, speed, &chunk);
         if (rc == SUPERTONIC_OK && chunk.samples && chunk.num_samples > 0) {
             out_pcm.assign(chunk.samples, chunk.samples + chunk.num_samples);
             out_sample_rate = chunk.sample_rate;

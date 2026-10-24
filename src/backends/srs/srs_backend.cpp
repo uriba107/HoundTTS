@@ -51,23 +51,6 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         // Opus-encode PCM as it arrives from the pipeline
         auto opusQueue = std::make_shared<AudioQueue>();
 
-        std::thread([pcm, opusQueue]() {
-            OpusFrameEncoder encoder;
-            if (!encoder.Init()) {
-                LogE("OpusFrameEncoder::Init() failed");
-                opusQueue->MarkDone();
-                return;
-            }
-            bool done = false;
-            while (!done) {
-                std::vector<int16_t> chunk = pcm->Pop(500, &done);
-                if (!chunk.empty())
-                    encoder.EncodeChunk(chunk.data(), static_cast<int>(chunk.size()), *opusQueue);
-            }
-            encoder.Flush(*opusQueue);
-            opusQueue->MarkDone();
-        }).detach();
-
         // Shared teardown: clears SRS position-sync callback, drains the opus
         // queue, detaches backend data, flags the session dead, and removes it
         // from the manager. Called from every exit path (success or failure)
@@ -82,25 +65,58 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
             }
         };
 
-        // Connect + handshake + stream
-        SRSClient client;
-        if (!client.Connect(host, port)) {
-            LogE("SRS connect failed host=" + host + " port=" + std::to_string(port));
-            cleanup();
-            return;
-        }
-        if (!client.Handshake(coalition, name, freqs, eamPassword)) {
-            LogE("SRS handshake failed");
-            client.Disconnect();
-            cleanup();
-            return;
-        }
-        LogI("Streaming to SRS name=" + name);
-        client.StreamFromQueue(*opusQueue, freqs, unitId, session, posData);
-        client.Disconnect();
-        LogI("Stream done name=" + name);
+        // An exception escaping this thread would call std::terminate and kill
+        // DCS, skipping cleanup() (leaving the session registered). Catch it,
+        // log, and still run cleanup.
+        try {
+            std::thread([pcm, opusQueue]() {
+                try {
+                    OpusFrameEncoder encoder;
+                    if (!encoder.Init()) {
+                        LogE("OpusFrameEncoder::Init() failed");
+                    } else {
+                        bool done = false;
+                        while (!done) {
+                            std::vector<int16_t> chunk = pcm->Pop(500, &done);
+                            if (!chunk.empty())
+                                encoder.EncodeChunk(chunk.data(), static_cast<int>(chunk.size()), *opusQueue);
+                        }
+                        encoder.Flush(*opusQueue);
+                    }
+                } catch (const std::exception& e) {
+                    LogE(std::string("Opus encode exception: ") + e.what());
+                } catch (...) {
+                    LogE("Opus encode unknown exception");
+                }
+                opusQueue->MarkDone(); // always signal completion to the streamer
+            }).detach();
 
-        cleanup();
+            // Connect + handshake + stream
+            SRSClient client;
+            if (!client.Connect(host, port)) {
+                LogE("SRS connect failed host=" + host + " port=" + std::to_string(port));
+                cleanup();
+                return;
+            }
+            if (!client.Handshake(coalition, name, freqs, eamPassword)) {
+                LogE("SRS handshake failed");
+                client.Disconnect();
+                cleanup();
+                return;
+            }
+            LogI("Streaming to SRS name=" + name);
+            client.StreamFromQueue(*opusQueue, freqs, unitId, session, posData);
+            client.Disconnect();
+            LogI("Stream done name=" + name);
+
+            cleanup();
+        } catch (const std::exception& e) {
+            LogE(std::string("SRS worker exception: ") + e.what());
+            cleanup();
+        } catch (...) {
+            LogE("SRS worker unknown exception");
+            cleanup();
+        }
 
     }).detach();
 

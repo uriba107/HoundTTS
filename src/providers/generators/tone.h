@@ -12,7 +12,9 @@ namespace HoundTTS {
 // Generates a fixed-frequency sine-wave tone and pushes it into queue.
 // durationS : length in seconds (>0; defaults to 2 if <=0)
 // volume    : 0.0–1.0
-// Calls queue->MarkDone() before returning.
+// queue     : required — a null queue is rejected (logged) and the call returns.
+// Calls queue->MarkDone() exactly once on every exit path, including
+// cancellation and exceptions thrown by Push().
 void GenerateTone(std::shared_ptr<PCMQueue> queue,
                   std::shared_ptr<Session>  session,
                   double durationS = 2.0,

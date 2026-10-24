@@ -40,18 +40,6 @@ static std::string SpeedToRate(double speed) {
     return ss.str();
 }
 
-static std::string JsonEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if      (c == '"')  out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else                out += c;
-    }
-    return out;
-}
-
 bool AwsTTS::SynthesizeToQueue(
     const std::string& text,
     const std::string& accessKey,
@@ -87,14 +75,14 @@ bool AwsTTS::SynthesizeToQueue(
 
     std::string inputText, textType;
     if (isSsml) {
-        inputText = JsonEscape(text);
+        inputText = Utils::JsonEscape(text);
         textType = "ssml";
     } else if (std::abs(speed - 1.0) > 0.01) {
         inputText = "<speak><prosody rate='" + SpeedToRate(speed) + "'>" +
-                    JsonEscape(text) + "</prosody></speak>";
+                    Utils::JsonEscape(text) + "</prosody></speak>";
         textType = "ssml";
     } else {
-        inputText = JsonEscape(text);
+        inputText = Utils::JsonEscape(text);
         textType = "text";
     }
 
@@ -102,7 +90,7 @@ bool AwsTTS::SynthesizeToQueue(
     bodyStream << "{"
                << "\"Text\":\"" << inputText << "\","
                << "\"TextType\":\"" << textType << "\","
-               << "\"VoiceId\":\"" << voiceId << "\","
+               << "\"VoiceId\":\"" << Utils::JsonEscape(voiceId) << "\","
                << "\"OutputFormat\":\"pcm\","
                << "\"SampleRate\":\"16000\","
                << "\"Engine\":\"" << eng << "\""

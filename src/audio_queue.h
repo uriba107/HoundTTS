@@ -30,6 +30,7 @@ public:
     // Returns frame, or empty vector if timed out.
     // Sets *done=true when producer has finished AND queue is empty.
     std::vector<uint8_t> Pop(int timeoutMs, bool* done) {
+        if (!done) return {}; // caller contract: `done` is required
         std::unique_lock<std::mutex> lock(m_mutex);
         if (m_queue.empty()) {
             m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs),

@@ -11,10 +11,12 @@ namespace HoundTTS {
 
 // Synthesizes text via ElevenLabs WebSocket streaming API.
 // Requests pcm_16000 (raw 16kHz mono PCM) → pushes raw PCM chunks to PCMQueue.
-// Calls queue.MarkDone() when done (success or failure).
+// Calls queue.MarkDone() on every normal return path (success or failure);
+// TTSPipeline's dispatch catch-all delivers MarkDone if this throws.
 class ElevenLabsTTS {
 public:
-    // apiKey:  ElevenLabs API key
+    // apiKey:  ElevenLabs API key — secret. Used only for the xi-api-key header
+    //          and the BOS frame; never logged, never returned to Lua.
     // modelId: ElevenLabs model e.g. "eleven_turbo_v2"
     // voiceId: ElevenLabs voice ID (per-call, from Lua provider_params.voice)
     // speed:   speaking rate (0.7–1.2 supported by ElevenLabs)

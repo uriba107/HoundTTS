@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <sstream>
 #include <algorithm>
+#include <array>
+#include <cctype>
 
 namespace HoundTTS {
 
@@ -20,13 +22,15 @@ static const char kB64Chars[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static std::string Base64Decode(const std::string& in) {
-    static int table[256];
-    static bool init = false;
-    if (!init) {
-        std::fill(table, table + 256, -1);
-        for (int i = 0; i < 64; i++) table[(unsigned char)kB64Chars[i]] = i;
-        init = true;
-    }
+    // Function-local static initialisation is thread-safe in C++11+; the old
+    // lazy `init` flag raced when two synthesis threads decoded concurrently.
+    static const std::array<int, 256> table = [] {
+        std::array<int, 256> t;
+        t.fill(-1);
+        for (int i = 0; i < 64; i++) t[static_cast<unsigned char>(kB64Chars[i])] = i;
+        return t;
+    }();
+
     std::string out;
     int val = 0, bits = -8;
     for (unsigned char c : in) {
@@ -41,17 +45,19 @@ static std::string Base64Decode(const std::string& in) {
     return out;
 }
 
-// Escape text for JSON string
-static std::string JsonEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if (c == '"')       out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else                out += c;
+// voice_id / model_id are interpolated into the URL path and query string.
+// Accept only the characters ElevenLabs uses so a stray '&', '?', '#' or space
+// cannot rewrite the request.
+static bool IsSafeUrlToken(const std::string& s, const char* extraChars) {
+    if (s.empty() || s.size() > 128) return false;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) != 0) continue;
+        bool allowed = false;
+        for (const char* p = extraChars; *p; ++p)
+            if (*p == static_cast<char>(c)) { allowed = true; break; }
+        if (!allowed) return false;
     }
-    return out;
+    return true;
 }
 
 // Extract a JSON string field value (minimal, no external dep)
@@ -93,6 +99,19 @@ bool ElevenLabsTTS::SynthesizeToQueue(
 
     std::string model = modelId.empty() ? "eleven_turbo_v2" : modelId;
 
+    // voiceId and model are interpolated into the URL path/query. Reject
+    // anything outside the character set ElevenLabs uses (Lua-supplied values).
+    if (!IsSafeUrlToken(voiceId, "_-")) {
+        LogE("ElevenLabs voice ID contains unsupported characters");
+        queue.MarkDone();
+        return false;
+    }
+    if (!IsSafeUrlToken(model, "_-.")) {
+        LogE("ElevenLabs model ID contains unsupported characters");
+        queue.MarkDone();
+        return false;
+    }
+
     // WebSocket path for streaming input
     std::string path = "/v1/text-to-speech/" + voiceId +
                        "/stream-input?model_id=" + model +
@@ -118,21 +137,36 @@ bool ElevenLabsTTS::SynthesizeToQueue(
     bos << "{"
         << "\"text\":\" \","
         << "\"voice_settings\":{\"stability\":0.5,\"similarity_boost\":0.8,\"speed\":" << speed << "},"
-        << "\"xi_api_key\":\"" << apiKey << "\","
-        << "\"model_id\":\"" << model << "\""
+        << "\"xi_api_key\":\"" << Utils::JsonEscape(apiKey) << "\","
+        << "\"model_id\":\"" << Utils::JsonEscape(model) << "\""
         << "}";
-    ws.send(bos.str());
+    if (!ws.send(bos.str())) {
+        LogE("WebSocket send failed (BOS frame)");
+        ws.close();
+        queue.MarkDone();
+        return false;
+    }
 
     // Send text chunk
     std::ostringstream textMsg;
     textMsg << "{"
-            << "\"text\":\"" << JsonEscape(text) << "\","
+            << "\"text\":\"" << Utils::JsonEscape(text) << "\","
             << "\"flush\":true"
             << "}";
-    ws.send(textMsg.str());
+    if (!ws.send(textMsg.str())) {
+        LogE("WebSocket send failed (text frame)");
+        ws.close();
+        queue.MarkDone();
+        return false;
+    }
 
     // Send EOS
-    ws.send("{\"text\":\"\"}");
+    if (!ws.send("{\"text\":\"\"}")) {
+        LogE("WebSocket send failed (EOS frame)");
+        ws.close();
+        queue.MarkDone();
+        return false;
+    }
 
     // Read audio responses until connection closes
     std::string msg;
@@ -148,9 +182,9 @@ bool ElevenLabsTTS::SynthesizeToQueue(
         size_t sampleBytes = (leftover.size() / 2) * 2;
         if (sampleBytes == 0) continue;
 
-        const int16_t* src = reinterpret_cast<const int16_t*>(leftover.data());
-        int sampleCount = static_cast<int>(sampleBytes / 2);
-        std::vector<int16_t> samples(src, src + sampleCount);
+        // memcpy into an int16 vector: casting the byte buffer to int16_t* is
+        // undefined behaviour (alignment + strict aliasing).
+        std::vector<int16_t> samples = Utils::PcmBytesToSamples(leftover.data(), sampleBytes);
         if (volume < 1.0) {
             double vol = std::max(0.0, std::min(1.0, volume));
             for (auto& s : samples)

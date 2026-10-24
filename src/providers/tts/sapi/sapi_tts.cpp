@@ -120,6 +120,35 @@ static HRESULT FindVoiceByName(const std::wstring& name, ISpObjectToken** ppToke
     return found;
 }
 
+// ISpStream with SPDFID_WaveFormatEx writes a RIFF/WAVE header into the base
+// stream. Locate the 'data' chunk payload: returns the offset and sets
+// pcmBytes to the payload length. A buffer with no RIFF/WAVE signature is raw
+// PCM starting at offset 0.
+static size_t PcmDataOffset(const void* data, size_t byteCount, size_t& pcmBytes) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    pcmBytes = byteCount;
+    if (byteCount < 12 || std::memcmp(bytes, "RIFF", 4) != 0 ||
+        std::memcmp(bytes + 8, "WAVE", 4) != 0) {
+        return 0;
+    }
+    size_t pos = 12;
+    while (pos + 8 <= byteCount) {
+        uint32_t chunkSize = 0;
+        std::memcpy(&chunkSize, bytes + pos + 4, sizeof(chunkSize));
+        const size_t payload = pos + 8;
+        if (std::memcmp(bytes + pos, "data", 4) == 0) {
+            // The writer may not have back-patched the size yet (0/stale), so
+            // fall back to whatever is left in the buffer.
+            const size_t remaining = byteCount - payload;
+            pcmBytes = (chunkSize > 0 && chunkSize <= remaining) ? chunkSize : remaining;
+            return payload;
+        }
+        pos = payload + chunkSize + (chunkSize & 1u);  // odd-sized chunks are padded
+    }
+    pcmBytes = 0;  // RIFF container without a data chunk: emit no audio
+    return byteCount;
+}
+
 } // anonymous namespace
 
 std::vector<int16_t> SapiTTS::Synthesize(
@@ -197,9 +226,11 @@ std::vector<int16_t> SapiTTS::Synthesize(
         if (byteCount < 2) break;
         void* pData = GlobalLock(hg);
         if (!pData) break;
-        size_t sampleCount = byteCount / 2;
-        result.resize(sampleCount);
-        std::memcpy(result.data(), pData, sampleCount * 2);
+        // Strip the RIFF/WAVE container that ISpStream prepends; keep raw PCM only.
+        size_t pcmBytes = 0;
+        const size_t pcmOffset = PcmDataOffset(pData, byteCount, pcmBytes);
+        result = Utils::PcmBytesToSamples(
+            static_cast<const uint8_t*>(pData) + pcmOffset, pcmBytes);
         GlobalUnlock(hg);
     } while (false);
 

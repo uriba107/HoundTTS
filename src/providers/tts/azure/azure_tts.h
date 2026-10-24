@@ -10,8 +10,13 @@
 namespace HoundTTS {
 
 // Synthesizes text via Azure Cognitive Services Speech REST API.
-// Requests audio/wav (16kHz mono PCM) → pushes raw PCM chunks to PCMQueue.
-// Calls queue.MarkDone() when done (success or failure).
+// Requests riff-16khz-16bit-mono-pcm; walks the RIFF chunks to the 'data'
+// payload and pushes 16 kHz mono int16 PCM to PCMQueue (non-RIFF bodies are
+// treated as raw PCM).
+// Plain text is XML-escaped into <speak>; a caller-supplied SSML document
+// (text starting with "<speak") is sent through unchanged.
+// Calls queue.MarkDone() exactly once on every return path, including when the
+// body throws (the detached-thread caller must never see an escaped exception).
 class AzureTTS {
 public:
     // key:    Azure subscription key

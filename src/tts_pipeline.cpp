@@ -43,6 +43,11 @@ static void LogW(const std::string& msg) { Logger::Instance().Error(kTag, "[WARN
 static void LogD(const std::string& msg) { Logger::Instance().Debug(kTag, msg); }
 
 void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue) {
+    if (!queue) {
+        LogE("Produce called with a null PCM queue; aborting");
+        return;
+    }
+
     // --- PCM cache: check for hit before any work ---
     const bool cacheable = (req.message != "__test_tone__");
     uint64_t cacheKey = 0;
@@ -51,13 +56,32 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         auto cached = PCMCache::Instance().Get(cacheKey);
         if (cached) {
             LogI("PCM cache hit");
-            // Replay cached PCM into queue (single chunk, detached thread)
+            // Replay cached PCM into queue (single chunk, detached thread).
+            // Push may throw (allocation); MarkDone must still be delivered or
+            // the consumer blocks in Pop() forever.
             std::thread([cached, queue]() {
-                queue->Push(std::vector<int16_t>(cached->begin(), cached->end()));
-                queue->MarkDone();
+                try {
+                    queue->Push(std::vector<int16_t>(cached->begin(), cached->end()));
+                } catch (const std::exception& e) {
+                    LogE(std::string("PCM cache replay failed: ") + e.what());
+                } catch (...) {
+                    LogE("PCM cache replay failed: unknown exception");
+                }
+                // Guarded too: nothing may escape a detached thread.
+                try {
+                    queue->MarkDone();
+                } catch (...) {
+                    LogE("PCM cache replay: MarkDone failed");
+                }
             }).detach();
             return;
         }
+    }
+
+    // --- Test tone: bypass provider dispatch entirely (and never cache it) ---
+    if (req.message == "__test_tone__") {
+        GenerateTone(queue, nullptr, 2.0, 440.0f, static_cast<float>(req.volume));
+        return;
     }
 
     // --- Cache miss: wrap queue with CachingPCMQueue to capture output,
@@ -78,8 +102,32 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
     // always call PCMQueue::MarkDone() on success AND failure paths, so we
     // must use the provider return value to decide whether to commit the
     // accumulated buffer to PCMCache (avoids caching truncated audio).
+    // Finalize itself forwards MarkDone; a throwing commit must not escape a
+    // detached thread (std::terminate) or strand the consumer.
     auto finalizeCache = [cachingQueue](bool ok) {
-        if (cachingQueue) cachingQueue->Finalize(ok);
+        if (!cachingQueue) return;
+        try {
+            cachingQueue->Finalize(ok);
+        } catch (const std::exception& e) {
+            LogE(std::string("PCM cache finalize failed: ") + e.what());
+        } catch (...) {
+            LogE("PCM cache finalize failed: unknown exception");
+        }
+    };
+
+    // Completion helper used by every dispatch path. MarkDone on a padded queue
+    // allocates (tail silence + deque node), so it can throw too — and an
+    // exception escaping a detached thread is std::terminate. Both calls are
+    // individually guarded, so `complete` never throws.
+    auto complete = [dispatchQueue, finalizeCache](bool ok) {
+        try {
+            dispatchQueue->MarkDone();
+        } catch (const std::exception& e) {
+            LogE(std::string("PCM queue completion failed: ") + e.what());
+        } catch (...) {
+            LogE("PCM queue completion failed: unknown exception");
+        }
+        finalizeCache(ok);
     };
 
     TtsProvider  provider  = req.provider;
@@ -243,44 +291,89 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
                 piperModel += ".onnx";
         }
 
-        // Streaming: detach synthesis thread so consumer can start immediately
-        std::thread([message, piperModel, piperPath, speaker, speed, volume, dispatchQueue, finalizeCache]() {
-            bool ok = PiperTTS::SynthesizeToQueue(message, piperModel, piperPath, speaker, speed, volume, *dispatchQueue);
-            finalizeCache(ok);
+        // Streaming: detach synthesis thread so consumer can start immediately.
+        // The provider is not required to be exception-safe at this boundary:
+        // catch here (a throw would terminate the process) and always deliver
+        // MarkDone so the consumer cannot block forever.
+        std::thread([message, piperModel, piperPath, speaker, speed, volume, dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = PiperTTS::SynthesizeToQueue(message, piperModel, piperPath, speaker, speed, volume, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogE(std::string("Piper synthesis threw: ") + e.what());
+            } catch (...) {
+                LogE("Piper synthesis threw: unknown exception");
+            }
+            complete(ok);
         }).detach();
 
     } else if (provider == TtsProvider::Azure) {
-        std::thread([message, azureKey, azureRegion, voice, culture, gender, speed, volume, dispatchQueue, finalizeCache]() {
-            bool ok = AzureTTS::SynthesizeToQueue(message, azureKey, azureRegion,
-                                                  voice, culture, gender, speed, volume, *dispatchQueue);
-            finalizeCache(ok);
+        std::thread([message, azureKey, azureRegion, voice, culture, gender, speed, volume, dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = AzureTTS::SynthesizeToQueue(message, azureKey, azureRegion,
+                                                 voice, culture, gender, speed, volume, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogE(std::string("Azure synthesis threw: ") + e.what());
+            } catch (...) {
+                LogE("Azure synthesis threw: unknown exception");
+            }
+            complete(ok);
         }).detach();
 
     } else if (provider == TtsProvider::Google) {
         // Single-shot REST — runs inline; queue->MarkDone() called inside
-        bool ok = GoogleTTS::SynthesizeToQueue(message, googleCreds,
-                                               voice, culture, gender, speed, volume, *dispatchQueue);
-        finalizeCache(ok);
+        bool ok = false;
+        try {
+            ok = GoogleTTS::SynthesizeToQueue(message, googleCreds,
+                                              voice, culture, gender, speed, volume, *dispatchQueue);
+        } catch (const std::exception& e) {
+            LogE(std::string("Google synthesis threw: ") + e.what());
+        } catch (...) {
+            LogE("Google synthesis threw: unknown exception");
+        }
+        complete(ok);
 
     } else if (provider == TtsProvider::ElevenLabs) {
-        std::thread([message, elevenLabsKey, elevenLabsModel, voice, speed, volume, dispatchQueue, finalizeCache]() {
-            bool ok = ElevenLabsTTS::SynthesizeToQueue(message, elevenLabsKey,
-                                                       elevenLabsModel, voice, speed, volume, *dispatchQueue);
-            finalizeCache(ok);
+        std::thread([message, elevenLabsKey, elevenLabsModel, voice, speed, volume, dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = ElevenLabsTTS::SynthesizeToQueue(message, elevenLabsKey,
+                                                      elevenLabsModel, voice, speed, volume, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogE(std::string("ElevenLabs synthesis threw: ") + e.what());
+            } catch (...) {
+                LogE("ElevenLabs synthesis threw: unknown exception");
+            }
+            complete(ok);
         }).detach();
 
     } else if (provider == TtsProvider::AWS) {
         // Single-shot REST — runs inline
-        bool ok = AwsTTS::SynthesizeToQueue(message, awsAccessKey, awsSecretKey,
-                                            awsRegion, voice, awsPollyEngine,
-                                            culture, gender, speed, volume, *dispatchQueue);
-        finalizeCache(ok);
+        bool ok = false;
+        try {
+            ok = AwsTTS::SynthesizeToQueue(message, awsAccessKey, awsSecretKey,
+                                           awsRegion, voice, awsPollyEngine,
+                                           culture, gender, speed, volume, *dispatchQueue);
+        } catch (const std::exception& e) {
+            LogE(std::string("Polly synthesis threw: ") + e.what());
+        } catch (...) {
+            LogE("Polly synthesis threw: unknown exception");
+        }
+        complete(ok);
 
     } else if (provider == TtsProvider::OpenAI) {
-        std::thread([message, openaiEndpoint, openaiKey, openaiModel, voice, speed, volume, dispatchQueue, finalizeCache]() {
-            bool ok = OpenAITTS::SynthesizeToQueue(message, openaiEndpoint, openaiKey,
-                                                   openaiModel, voice, speed, volume, *dispatchQueue);
-            finalizeCache(ok);
+        std::thread([message, openaiEndpoint, openaiKey, openaiModel, voice, speed, volume, dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = OpenAITTS::SynthesizeToQueue(message, openaiEndpoint, openaiKey,
+                                                  openaiModel, voice, speed, volume, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogE(std::string("OpenAI synthesis threw: ") + e.what());
+            } catch (...) {
+                LogE("OpenAI synthesis threw: unknown exception");
+            }
+            complete(ok);
         }).detach();
 
     } else if (provider == TtsProvider::Supertonic) {
@@ -324,42 +417,63 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
 
         std::thread([message, stPath, stModelPath, stStylePath, stLang,
                      stSteps, stSpeed, volume, stMaxConc, stThreads,
-                     dispatchQueue, finalizeCache]() {
-            bool ok = SupertonicTTS::SynthesizeToQueue(
-                message, stPath, stModelPath, stStylePath, stLang,
-                stSteps, stSpeed, volume, stMaxConc, stThreads, *dispatchQueue);
-            finalizeCache(ok);
+                     dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = SupertonicTTS::SynthesizeToQueue(
+                    message, stPath, stModelPath, stStylePath, stLang,
+                    stSteps, stSpeed, volume, stMaxConc, stThreads, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogE(std::string("Supertonic synthesis threw: ") + e.what());
+            } catch (...) {
+                LogE("Supertonic synthesis threw: unknown exception");
+            }
+            complete(ok);
         }).detach();
 
     } else if (provider == TtsProvider::Edge) {
-        std::thread([message, voice, culture, gender, speed, volume, dispatchQueue, finalizeCache]() {
-            bool ok = EdgeTTS::SynthesizeToQueue(message, voice, culture, gender,
-                                                  speed, volume, *dispatchQueue);
-            finalizeCache(ok);
+        std::thread([message, voice, culture, gender, speed, volume, dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = EdgeTTS::SynthesizeToQueue(message, voice, culture, gender,
+                                                speed, volume, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogE(std::string("Edge synthesis threw: ") + e.what());
+            } catch (...) {
+                LogE("Edge synthesis threw: unknown exception");
+            }
+            complete(ok);
         }).detach();
-
-    } else if (message == "__test_tone__") {
-        GenerateTone(queue, nullptr, 2.0, 440.0f, static_cast<float>(volume));
 
     } else if (provider == TtsProvider::Sapi) {
         LogD("SAPI dispatch (explicit)");
-        std::vector<int16_t> pcm = SapiTTS::Synthesize(
-            message, voice, gender, culture, speed, volume);
+        std::vector<int16_t> pcm;
+        try {
+            pcm = SapiTTS::Synthesize(message, voice, gender, culture, speed, volume);
+        } catch (const std::exception& e) {
+            LogE(std::string("SAPI synthesis threw: ") + e.what());
+        } catch (...) {
+            LogE("SAPI synthesis threw: unknown exception");
+        }
         bool ok = !pcm.empty();
         if (ok)
             dispatchQueue->Push(std::move(pcm));
-        dispatchQueue->MarkDone();
-        finalizeCache(ok);
+        complete(ok);
 
     } else {
         LogW("SAPI fallback — unrecognized provider: " + std::string(TtsProviderName(provider)));
-        std::vector<int16_t> pcm = SapiTTS::Synthesize(
-            message, voice, gender, culture, speed, volume);
+        std::vector<int16_t> pcm;
+        try {
+            pcm = SapiTTS::Synthesize(message, voice, gender, culture, speed, volume);
+        } catch (const std::exception& e) {
+            LogE(std::string("SAPI fallback threw: ") + e.what());
+        } catch (...) {
+            LogE("SAPI fallback threw: unknown exception");
+        }
         bool ok = !pcm.empty();
         if (ok)
             dispatchQueue->Push(std::move(pcm));
-        dispatchQueue->MarkDone();
-        finalizeCache(ok);
+        complete(ok);
     }
 }
 

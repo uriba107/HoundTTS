@@ -15,7 +15,10 @@ public:
     // accessKey: AWS access key ID
     // secretKey: AWS secret access key
     // region:    AWS region e.g. "us-east-1"
-    // language:  target language name e.g. "German" or ISO 639-1 code e.g. "de"
+    // language:  target language name e.g. "German" or ISO 639-1/2 code e.g. "de".
+    //            Names are mapped to codes internally; anything else must be a
+    //            2-3 ASCII letter code (Utils::IsAlphaLanguageCode). Rejected
+    //            values fail the call before any request is built.
     // text:      text to translate
     // Returns:   translated text, or empty string on failure (error is logged).
     static std::string Translate(

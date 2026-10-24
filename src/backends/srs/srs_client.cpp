@@ -161,7 +161,7 @@ static void WriteDouble(uint8_t* buf, double v) {
 SRSClient::SRSClient() {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
-    m_guid = GenerateGUID();
+    m_guid = Utils::GenerateSRSGuid();
 }
 
 SRSClient::~SRSClient() {
@@ -172,6 +172,13 @@ SRSClient::~SRSClient() {
 bool SRSClient::Connect(const std::string& host, int port) {
     m_host = host;
     m_port = port;
+
+    if (m_guid.empty()) {
+        LogE("SRS GUID generation failed — refusing to connect");
+        return false;
+    }
+
+    Disconnect(); // release sockets left over from a previous Connect() attempt
 
     // --- TCP ---
     m_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -191,6 +198,8 @@ bool SRSClient::Connect(const std::string& host, int port) {
     if (connect(m_tcp, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         LogE("TCP connect() failed host=" + host + " port=" + std::to_string(port) +
              " WSA=" + std::to_string(WSAGetLastError()));
+        closesocket(m_tcp);
+        m_tcp = INVALID_SOCKET;
         return false;
     }
 
@@ -198,6 +207,8 @@ bool SRSClient::Connect(const std::string& host, int port) {
     m_udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (m_udp == INVALID_SOCKET) {
         LogE("UDP socket() failed WSA=" + std::to_string(WSAGetLastError()));
+        closesocket(m_tcp);
+        m_tcp = INVALID_SOCKET;
         return false;
     }
 
@@ -421,12 +432,14 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
             std::ostringstream msg;
             msg << R"({"Version":")" << kSRSVersion
                 << R"(","MsgType":0,"Client":)" << metaJson << "}";
-            if (SendTCP(msg.str())) {
-                posData->lastSentLat = lat;
-                posData->lastSentLon = lon;
-                posData->lastSentAlt = alt;
-                posData->lastSentAt  = now;
-            }
+            // Record the attempt before sending: a failed TCP send must not leave
+            // heartbeatDue/posChanged true, or the 10 ms loop below retries it
+            // (and logs) every iteration until the next successful send.
+            posData->lastSentLat = lat;
+            posData->lastSentLon = lon;
+            posData->lastSentAlt = alt;
+            posData->lastSentAt  = now;
+            SendTCP(msg.str());
         };
     }
 
@@ -436,6 +449,19 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         TimerProc,
         reinterpret_cast<DWORD_PTR>(&state),
         TIME_PERIODIC);
+    if (timerId == 0) {
+        // No timer → nothing will ever drain the queue or set state.finished.
+        // Abort cleanly instead of spinning forever in the wait loop below.
+        LogE("timeSetEvent() failed — aborting SRS stream");
+        state.finished.store(true);
+        queue.MarkDone();
+        timeEndPeriod(1);
+        if (posData) {
+            std::lock_guard<std::mutex> lk(posData->syncMutex);
+            posData->sendPositionSync = nullptr;
+        }
+        return;
+    }
 
     // Wait until timer callback signals done, sending TCP pings every 15s.
     // Also fires a position heartbeat every 175s when posData is active.

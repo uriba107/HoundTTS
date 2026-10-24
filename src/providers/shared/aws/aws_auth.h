@@ -31,6 +31,8 @@ std::vector<unsigned char> DeriveSigningKey(const std::string& secretKey,
                                              const std::string& service);
 
 // Build the full Authorization header value for an AWS SigV4 request.
+// Returns an empty string if any OpenSSL hash/HMAC step fails (error is logged);
+// callers must treat an empty result as "cannot sign".
 // accessKey  : AWS access key ID
 // secretKey  : AWS secret access key
 // region     : AWS region e.g. "us-east-1"

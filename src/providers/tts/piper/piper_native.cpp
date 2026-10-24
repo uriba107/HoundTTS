@@ -57,6 +57,13 @@ bool PiperNative::Load(const std::string& dllDir) {
 
     if (!fn_create_ || !fn_free_ || !fn_defaults_ || !fn_start_ || !fn_next_) {
         LogE("piper.dll loaded but missing one or more required exports — disabling");
+        // Drop every pointer: FreeLibrary invalidates them, and callers (e.g.
+        // PiperModelPool::Release) call Free() without checking Available().
+        fn_create_   = nullptr;
+        fn_free_     = nullptr;
+        fn_defaults_ = nullptr;
+        fn_start_    = nullptr;
+        fn_next_     = nullptr;
         FreeLibrary(hDll_);
         hDll_ = nullptr;
         return false;
@@ -75,24 +82,52 @@ bool PiperNative::Available() const {
 
 piper_synthesizer* PiperNative::Create(const char* modelPath, const char* configPath,
                                         const char* espeakDataPath) {
-    return fn_create_(modelPath, configPath, espeakDataPath);
+    PFN_piper_create fn = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn = fn_create_;
+    }
+    return fn ? fn(modelPath, configPath, espeakDataPath) : nullptr;
 }
 
 void PiperNative::Free(piper_synthesizer* synth) {
-    fn_free_(synth);
+    PFN_piper_free fn = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn = fn_free_;
+    }
+    if (fn && synth) fn(synth);
 }
 
 piper_synthesize_options PiperNative::DefaultOptions(piper_synthesizer* synth) {
-    return fn_defaults_(synth);
+    PFN_piper_default_synthesize_options fn = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn = fn_defaults_;
+    }
+    if (!fn || !synth) return piper_synthesize_options{};
+    return fn(synth);
 }
 
 int PiperNative::SynthesizeStart(piper_synthesizer* synth, const char* text,
                                    const piper_synthesize_options* options) {
-    return fn_start_(synth, text, options);
+    PFN_piper_synthesize_start fn = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn = fn_start_;
+    }
+    if (!fn || !synth) return PIPER_ERR_GENERIC;
+    return fn(synth, text, options);
 }
 
 int PiperNative::SynthesizeNext(piper_synthesizer* synth, piper_audio_chunk* chunk) {
-    return fn_next_(synth, chunk);
+    PFN_piper_synthesize_next fn = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn = fn_next_;
+    }
+    if (!fn || !synth || !chunk) return PIPER_ERR_GENERIC;
+    return fn(synth, chunk);
 }
 
 } // namespace HoundTTS

@@ -124,7 +124,9 @@ local function getTransmitterPos(dcsObject)
     local pos = dcsObject:getPoint()
     local transmitterObjectCat, transmitterSubCat = dcsObject:getCategory()
     if transmitterObjectCat == Object.Category.STATIC or (transmitterObjectCat == Object.Category.UNIT and transmitterSubCat == Unit.Category.GROUND_UNIT) then
-        local verticalOffset = (dcsObject:getDesc()["box"]["max"]["y"] + 5) or 20
+        local desc = dcsObject:getDesc()
+        local maxY = desc and desc.box and desc.box.max and desc.box.max.y
+        local verticalOffset = (type(maxY) == "number" and (maxY + 5)) or 20
         pos.y = pos.y + verticalOffset
     end
     return pos
@@ -400,21 +402,42 @@ function HoundTTS.Translate(message, provider_params, callback)
         return
     end
 
-    -- Poll every 0.5s until the background thread finishes
+    -- Poll every 0.5s until the background thread finishes.
+    -- Bounded by TRANSLATE_TIMEOUT so a stalled request cannot poll forever.
+    local started = timer.getTime()
+    local TRANSLATE_TIMEOUT = 30
     local function poll(_, t)
-        local result, pollErr = _dll.getTranslationResult(id)
+        local now = t or timer.getTime()
+        local ok, result, pollErr = pcall(_dll.getTranslationResult, id)
+        if not ok then
+            env.error("[HoundTTS] Translate: getTranslationResult failed: " .. tostring(result))
+            pcall(callback, nil, tostring(result))
+            return nil   -- stop polling
+        end
         if result ~= nil then
             -- Got a translated string
-            callback(result, nil)
+            local cbOk, cbErr = pcall(callback, result, nil)
+            if not cbOk then
+                env.error("[HoundTTS] Translate: callback error: " .. tostring(cbErr))
+            end
             return nil   -- stop polling
         end
         if pollErr ~= nil then
             -- Done with error
-            callback(nil, pollErr)
+            local cbOk, cbErr = pcall(callback, nil, pollErr)
+            if not cbOk then
+                env.error("[HoundTTS] Translate: callback error: " .. tostring(cbErr))
+            end
+            return nil   -- stop polling
+        end
+        if now - started > TRANSLATE_TIMEOUT then
+            env.error(string.format(
+                "[HoundTTS] Translate: timed out after %ds (request id %s)", TRANSLATE_TIMEOUT, tostring(id)))
+            pcall(callback, nil, "translation timed out")
             return nil   -- stop polling
         end
         -- Still pending — check again in 0.5s
-        return t + 0.5
+        return now + 0.5
     end
 
     timer.scheduleFunction(poll, nil, timer.getTime() + 0.5)

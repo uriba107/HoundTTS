@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <sstream>
 #include <algorithm>
+#include <array>
+#include <cctype>
 
 namespace HoundTTS {
 
@@ -20,13 +22,15 @@ static const char kB64Chars[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static std::string Base64Decode(const std::string& in) {
-    static int table[256];
-    static bool init = false;
-    if (!init) {
-        std::fill(table, table + 256, -1);
-        for (int i = 0; i < 64; i++) table[(unsigned char)kB64Chars[i]] = i;
-        init = true;
-    }
+    // Function-local static initialisation is thread-safe in C++11+; the old
+    // lazy `init` flag raced when two synthesis threads decoded concurrently.
+    static const std::array<int, 256> table = [] {
+        std::array<int, 256> t;
+        t.fill(-1);
+        for (int i = 0; i < 64; i++) t[static_cast<unsigned char>(kB64Chars[i])] = i;
+        return t;
+    }();
+
     std::string out;
     int val = 0, bits = -8;
     for (unsigned char c : in) {
@@ -91,10 +95,10 @@ bool GoogleTTS::SynthesizeToQueue(
     body << "{"
          << "\"input\":{\"" << (isSsml ? "ssml" : "text") << "\":\"" << GoogleAuth::JsonEscape(text) << "\"},"
          << "\"voice\":{"
-         << "\"languageCode\":\"" << locale << "\","
+         << "\"languageCode\":\"" << Utils::JsonEscape(locale) << "\","
          << "\"ssmlGender\":\"" << ssmlGender << "\"";
     if (!voice.empty())
-        body << ",\"name\":\"" << voice << "\"";
+        body << ",\"name\":\"" << Utils::JsonEscape(voice) << "\"";
     body << "},"
          << "\"audioConfig\":{"
          << "\"audioEncoding\":\"LINEAR16\","
@@ -143,9 +147,9 @@ bool GoogleTTS::SynthesizeToQueue(
         return false;
     }
 
-    int sampleCount = static_cast<int>(pcmRaw.size() / 2);
-    std::vector<int16_t> samples(reinterpret_cast<const int16_t*>(pcmRaw.data()),
-                                  reinterpret_cast<const int16_t*>(pcmRaw.data()) + sampleCount);
+    // memcpy into an int16 vector: casting the byte buffer to int16_t* is
+    // undefined behaviour (alignment + strict aliasing).
+    std::vector<int16_t> samples = Utils::PcmBytesToSamples(pcmRaw.data(), pcmRaw.size());
     if (volume < 1.0) {
         double vol = std::max(0.0, std::min(1.0, volume));
         for (auto& s : samples)

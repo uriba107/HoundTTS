@@ -44,7 +44,12 @@ function houndtts_hooks.onMissionLoadEnd()
     -- HoundTTS-mission.lua itself via env.error(), which appears in dcs.log.
     local cmd = string.format(
         'a_do_script("pcall(dofile,\\"%s\\")")', path)
-    net.dostring_in("mission", cmd)
+    local ok, err = pcall(net.dostring_in, "mission", cmd)
+    if not ok then
+        log.write("HoundTTS", log.ERROR,
+            "Failed to inject HoundTTS-mission.lua: " .. tostring(err))
+        return
+    end
     log.write("HoundTTS", log.INFO,
         "HoundTTS-mission.lua injection attempted via hook. "..
         "See dcs.log for mission-side load result.")
