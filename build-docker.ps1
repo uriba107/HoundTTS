@@ -111,16 +111,26 @@ if ($Windows) {
     $timeout  = 10
     $proceed  = $true
     $deadline = (Get-Date).AddSeconds($timeout)
-    while ((Get-Date) -lt $deadline) {
-        if ([Console]::KeyAvailable) {
-            $key = [Console]::ReadKey($true)
-            Write-Host ""
-            if ($key.KeyChar -match '^[Nn]') { $proceed = $false }
-            break
+
+    # Console.KeyAvailable throws when stdin is redirected (CI, build.bat piped
+    # through a wrapper, non-interactive shells). Fall through without waiting.
+    $hasConsole = $true
+    try { $null = [Console]::KeyAvailable } catch { $hasConsole = $false }
+
+    if ($hasConsole) {
+        while ((Get-Date) -lt $deadline) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                Write-Host ""
+                if ($key.KeyChar -match '^[Nn]') { $proceed = $false }
+                break
+            }
+            Start-Sleep -Milliseconds 200
         }
-        Start-Sleep -Milliseconds 200
+        if ((Get-Date) -ge $deadline) { Write-Host " (timed out, continuing)" }
+    } else {
+        Write-Host " (no console input, continuing)"
     }
-    if ((Get-Date) -ge $deadline) { Write-Host " (timed out, continuing)" }
     if (-not $proceed) {
         Write-Host "Build cancelled." -ForegroundColor Red
         Stop-Transcript | Out-Null
