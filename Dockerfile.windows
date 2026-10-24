@@ -22,8 +22,8 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; \
      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
 
-ARG CMAKE_VERSION=4.3.2
-ARG GIT_VERSION=2.54.0
+ARG CMAKE_VERSION=4.4.4
+ARG GIT_VERSION=2.56.0
 ARG WGET_VERSION=1.21.4
 ARG UNZIP_VERSION=6.0
 
@@ -63,13 +63,13 @@ RUN powershell -NoProfile -Command \
 
 # vcpkg — classic mode install (no vcpkg.json manifest; version pinned via VCPKG_TAG)
 # Install packages — versions determined by the pinned vcpkg tag's built-in baseline
-ARG VCPKG_TAG=2026.06.01
+ARG VCPKG_TAG=2026.10.16
 RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.git C:\\vcpkg && \
     C:\\vcpkg\\bootstrap-vcpkg.bat -disableMetrics && \
     C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static nlohmann-json:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
-ARG HTTPLIB_VERSION=v0.48.0
+ARG HTTPLIB_VERSION=v0.63.0
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
@@ -123,7 +123,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
 # ============================================================
 FROM deps AS piper
 
-ARG PIPER1_GPL_TAG=v1.6.1
+ARG PIPER1_GPL_TAG=v1.8.0
 RUN git clone --branch %PIPER1_GPL_TAG% --depth 1 \
     https://github.com/OHF-Voice/piper1-gpl.git C:\piper1-gpl
 
