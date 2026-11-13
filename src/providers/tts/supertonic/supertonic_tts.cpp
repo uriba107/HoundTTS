@@ -319,11 +319,16 @@ bool SupertonicTTS::SynthesizeToQueue(
     struct SlotGuard {
         SupertonicPool& pool;
         bool released = false;
-        ~SlotGuard() { if (!released) pool.ReleaseSlot(); }
+        // Runs during stack unwinding: ReleaseSlot takes a lock, so it must not
+        // throw out of the destructor.
+        ~SlotGuard() noexcept {
+            if (released) return;
+            try { pool.ReleaseSlot(); } catch (...) {}
+        }
         void Release() {
             if (released) return;
+            pool.ReleaseSlot();   // only claim the slot is back once it is
             released = true;
-            pool.ReleaseSlot();
         }
     } slotGuard{pool};
 
@@ -338,6 +343,8 @@ bool SupertonicTTS::SynthesizeToQueue(
 
     if (rc != SUPERTONIC_OK || floatPcm.empty()) {
         LogE("supertonic_synthesize failed");
+        // Same as the success path: completion work must not hold a slot.
+        slotGuard.Release();
         queue.MarkDone();
         return false;
     }

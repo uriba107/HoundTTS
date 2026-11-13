@@ -13,6 +13,7 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <utility>
 #include <windows.h>
 
 namespace HoundTTS {
@@ -28,6 +29,22 @@ namespace HoundTTS {
 // Call Error/Info/Debug from any thread — they return almost instantly.
 // ---------------------------------------------------------------------------
 enum class LogLevel { LEVEL_ERROR = 0, LEVEL_INFO = 1, LEVEL_DEBUG = 2 };
+
+// Fire-and-forget thread spawn.
+//
+// `std::thread(lambda).detach()` as one expression is not exception-safe: if
+// the constructor succeeds but detach() throws, the temporary is still
+// joinable when its destructor runs and std::terminate follows. This keeps the
+// project's detached-thread convention while making that failure path safe.
+template <typename F>
+inline void SpawnDetached(F&& f) {
+    std::thread t(std::forward<F>(f));
+    try {
+        t.detach();
+    } catch (...) {
+        t.join();   // never leave a joinable thread behind
+    }
+}
 
 // Shared state between Logger and the writer thread.
 // Prevent use-after-free on DLL unload via shared_ptr ownership.
@@ -49,13 +66,19 @@ public:
     void Init(const std::string& writedir) {
         if (writedir.empty()) return;
         std::lock_guard<std::mutex> initLock(initMu_);
-        // Idempotent: l_init() may be called again (mission reload). A second
-        // queue would leak a writer thread and interleave writes to the file.
-        if (std::atomic_load(&queue_)) return;
 
         std::string path = writedir;
         if (path.back() != '\\' && path.back() != '/') path += '\\';
         path += "Logs\\HoundTTS.log";
+
+        // Idempotent: l_init() may be called again (mission reload). A second
+        // queue would leak a writer thread and interleave writes to the file.
+        if (auto existing = std::atomic_load(&queue_)) {
+            if (existing->logPath != path)
+                Emit("HoundTTS/init", "WARN",
+                     "Logger already initialized for a different writedir");
+            return;
+        }
 
         auto q = std::make_shared<LogQueue>();
         q->logPath = path;
@@ -64,7 +87,7 @@ public:
 
         // Writer thread owns a shared_ptr — state survives even if
         // Logger is destroyed first (DLL unload order).
-        std::thread([q]() {
+        SpawnDetached([q]() {
             while (q->alive.load()) {
                 std::deque<std::string> batch;
                 {
@@ -88,7 +111,7 @@ public:
                 std::ofstream f(q->logPath, std::ios::app);
                 if (f) for (auto& line : tail) f << line;
             }
-        }).detach();
+        });
     }
 
     void SetLevel(LogLevel level) { level_.store(level); }
@@ -108,7 +131,10 @@ public:
     ~Logger() {
         auto q = std::atomic_load(&queue_);
         if (q) {
-            q->alive.store(false);
+            // Set alive under the queue lock: Emit() publishes under the same
+            // lock, so this closes the window where a concurrent emit checks
+            // alive==true and enqueues after teardown began.
+            { std::lock_guard<std::mutex> lk(q->mu); q->alive.store(false); }
             q->cv.notify_one();
         }
         // Don't join — writer thread holds its own shared_ptr and will
@@ -128,9 +154,11 @@ private:
         OutputDebugStringA(line.c_str());
         // Enqueue for file write (fast: only a deque push under lock)
         auto q = std::atomic_load(&queue_);
-        if (!q || !q->alive.load()) return;
+        if (!q) return;
         {
             std::lock_guard<std::mutex> lk(q->mu);
+            // Re-check under the lock: ~Logger() clears alive under this mutex.
+            if (!q->alive.load()) return;
             q->entries.push_back(std::move(line));
         }
         q->cv.notify_one();

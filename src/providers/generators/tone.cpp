@@ -28,7 +28,12 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
     // Push()/allocation — otherwise a consumer blocked in PCMQueue::Pop() hangs.
     struct MarkDoneGuard {
         PCMQueue* q;
-        ~MarkDoneGuard() { if (q) q->MarkDone(); }
+        // MarkDone allocates tail silence and may throw; a throwing destructor
+        // during stack unwinding would call std::terminate.
+        ~MarkDoneGuard() noexcept {
+            if (!q) return;
+            try { q->MarkDone(); } catch (...) {}
+        }
     } doneGuard{queue.get()};
 
     // Validate duration: NaN or Inf → safe fallback

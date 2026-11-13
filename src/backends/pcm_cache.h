@@ -182,6 +182,10 @@ public:
                 finalized_.store(true, std::memory_order_release);
                 if (!failed_.load(std::memory_order_acquire))
                     pcm.swap(accumulator_);
+                else
+                    // Never committed — release the buffered PCM immediately
+                    // instead of holding it until the queue is destroyed.
+                    std::vector<int16_t>().swap(accumulator_);
             }
             if (!pcm.empty()) {
                 auto sp = std::make_shared<std::vector<int16_t>>(std::move(pcm));
@@ -190,7 +194,13 @@ public:
         } catch (...) {
             ep = std::current_exception();
         }
-        MarkDone();
+        try {
+            MarkDone();
+        } catch (...) {
+            // Preserve a commit exception as primary; swallow the completion
+            // failure only when there is nothing better to report.
+            if (!ep) ep = std::current_exception();
+        }
         if (ep) std::rethrow_exception(ep);
     }
 

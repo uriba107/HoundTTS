@@ -33,7 +33,14 @@ static std::string XmlEscape(const std::string& s)
             case '>':  out += "&gt;";   break;
             case '"':  out += "&quot;"; break;
             case '\'': out += "&apos;"; break;
-            default:   out += c;        break;
+            default: {
+                // C0 controls (except tab/newline/CR) and DEL are invalid in
+                // XML 1.0; passing them through makes Polly reject the SSML.
+                const unsigned char uc = static_cast<unsigned char>(c);
+                if (c == '\t' || c == '\n' || c == '\r' || (uc >= 0x20 && uc != 0x7F))
+                    out += c;
+                break;
+            }
         }
     }
     return out;
@@ -80,10 +87,21 @@ bool AwsTTS::SynthesizeToQueue(
         queue.MarkDone();
         return false;
     }
+    if (!AwsAuth::IsValidAwsRegion(region)) {
+        LogE("Polly region is not a valid AWS region: " + region);
+        queue.MarkDone();
+        return false;
+    }
+    if (text.empty()) {
+        queue.MarkDone();
+        return false;
+    }
 
     std::string voiceId = voice.empty() ? DefaultVoice(culture, gender) : voice;
     std::string eng     = engine.empty() ? "standard" : engine;
 
+    // NaN/Inf bypass both comparisons; SpeedToRate's int cast on NaN is UB.
+    if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.2) speed = 0.2;
     if (speed > 5.0) speed = 5.0;
 

@@ -46,6 +46,7 @@ bool PiperNative::Load(const std::string& dllDir) {
 
     if (!hDll_) {
         LogE("LoadLibrary failed for piper.dll (GLE=" + std::to_string(loadErr) + ") — piper.exe subprocess fallback active");
+        loaded_ = false;   // allow a later Load() with a corrected path
         return false;
     }
 
@@ -66,6 +67,7 @@ bool PiperNative::Load(const std::string& dllDir) {
         fn_next_     = nullptr;
         FreeLibrary(hDll_);
         hDll_ = nullptr;
+        loaded_ = false;   // allow a later Load() with a corrected path
         return false;
     }
 
@@ -80,6 +82,10 @@ bool PiperNative::Available() const {
     return available_;
 }
 
+// Safety invariant: Load() holds mutex_ for its entire duration and there is no
+// unload path, so snapshotting a function pointer under the lock and invoking it
+// after unlocking cannot race a FreeLibrary that would invalidate the pointer.
+// Any future unload must take mutex_ and wait for in-flight callers.
 piper_synthesizer* PiperNative::Create(const char* modelPath, const char* configPath,
                                         const char* espeakDataPath) {
     PFN_piper_create fn = nullptr;

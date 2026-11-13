@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <atomic>
 #include <memory>
+#include <stdexcept>
 
 namespace HoundTTS {
 
@@ -88,7 +89,14 @@ constexpr int    PTT_PAD_SAMPLES = static_cast<int>(PTT_PAD_SEC * 16000);
 class PaddedPCMQueue : public PCMQueue {
 public:
     PaddedPCMQueue(std::shared_ptr<PCMQueue> downstream, int padSamples = PTT_PAD_SAMPLES)
-        : downstream_(std::move(downstream)), padSamples_(padSamples) {}
+        : downstream_(std::move(downstream)), padSamples_(padSamples) {
+        // Fail fast on a null downstream / negative pad: both would otherwise
+        // surface later as a crash inside Push()/MarkDone() on a detached thread.
+        if (!downstream_)
+            throw std::invalid_argument("PaddedPCMQueue: downstream cannot be null");
+        if (padSamples_ < 0)
+            throw std::invalid_argument("PaddedPCMQueue: padSamples must be non-negative");
+    }
 
     void Push(std::vector<int16_t> chunk) override {
         // Push and MarkDone may arrive from different threads (e.g. a killed

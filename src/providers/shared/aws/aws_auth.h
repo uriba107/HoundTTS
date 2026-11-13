@@ -9,8 +9,13 @@
 namespace HoundTTS {
 namespace AwsAuth {
 
-// Hex-encode raw bytes.
+// Hex-encode raw bytes. Returns "" for a null pointer or zero length.
 std::string HexEncode(const unsigned char* data, size_t len);
+
+// True when `region` is a plausible AWS region (lowercase letters, digits and
+// '-', at most 32 chars). Used before interpolating a region into an endpoint
+// host, so a malformed/hostile value cannot rewrite the request.
+bool IsValidAwsRegion(const std::string& region);
 
 // SHA-256 hash of data, returned as lowercase hex.
 std::string SHA256Hex(const std::string& data);

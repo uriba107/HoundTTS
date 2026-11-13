@@ -88,8 +88,12 @@ std::string JsonDecodeString(const std::string& s, size_t pos, size_t* endPos) {
         case 't':  out += '\t'; break;
         case 'u': {
             if (pos + 4 > s.size()) {
+                // Truncated escape: consume only the hex digits actually
+                // present, so a following closing quote is still detected and
+                // endPos stays accurate.
                 out += '?';
-                pos = s.size();   // truncated escape: nothing left to decode
+                for (int i = 0; i < 4 && pos < s.size() && HexDigit(s[pos]) >= 0; ++i)
+                    ++pos;
                 break;
             }
             unsigned int cp = 0;

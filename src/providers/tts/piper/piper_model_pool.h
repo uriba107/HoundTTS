@@ -51,6 +51,11 @@ public:
     // returns them (freeing them here would be a use-after-free).
     void Clear();
 
+    // Give an active slot reserved by Acquire() back to the semaphore.
+    // Internal: used by Acquire()'s RAII guard so an exception between reserving
+    // a slot and returning a synthesizer cannot starve the pool.
+    void ReleaseActiveSlot();
+
 private:
     PiperModelPool() = default;
     ~PiperModelPool() = default;

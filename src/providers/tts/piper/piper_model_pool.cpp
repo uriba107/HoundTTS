@@ -20,6 +20,15 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
     auto& native = PiperNative::Instance();
     if (!native.Available()) return nullptr;
 
+    // Every exit path except a successful hand-off must give the reserved slot
+    // back — including an exception from an allocation below — otherwise
+    // Acquire() starves permanently.
+    struct SlotGuard {
+        PiperModelPool& pool;
+        bool disarmed = false;
+        ~SlotGuard() { if (!disarmed) pool.ReleaseActiveSlot(); }
+    } slotGuard{*this};
+
     // Bounded concurrency: block until an active slot is available, then
     // try to take an idle instance from the pool or fall through to create one.
     {
@@ -36,6 +45,7 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
         if (it != pool_.end() && !it->second.empty()) {
             piper_synthesizer* synth = it->second.back();
             it->second.pop_back();
+            slotGuard.disarmed = true;
             return synth;
         }
     }
@@ -49,37 +59,30 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
         LogI("Loading model: " + modelPath);
         synth = native.Create(modelPath.c_str(), nullptr, espeakDataPath.c_str());
     } catch (const std::exception& e) {
-        // Give the reserved slot back, otherwise Acquire() starves permanently.
         LogE(std::string("piper_create threw for model: ") + modelPath + ": " + e.what());
-        {
-            std::lock_guard<std::mutex> lock(poolMutex_);
-            --activeCount_;
-        }
-        activeCv_.notify_one();
         throw;
     } catch (...) {
         LogE("piper_create threw for model: " + modelPath + ": unknown exception");
-        {
-            std::lock_guard<std::mutex> lock(poolMutex_);
-            --activeCount_;
-        }
-        activeCv_.notify_one();
         throw;
     }
 
     if (!synth) {
         LogE("piper_create failed for model: " + modelPath);
-        // Release the active slot we reserved above.
-        {
-            std::lock_guard<std::mutex> lock(poolMutex_);
-            --activeCount_;
-        }
-        activeCv_.notify_one();
         return nullptr;
     }
 
     LogI("Model loaded: " + modelPath);
+    slotGuard.disarmed = true;
     return synth;
+}
+
+void PiperModelPool::ReleaseActiveSlot() {
+    {
+        std::lock_guard<std::mutex> lock(poolMutex_);
+        --activeCount_;
+    }
+    // Notify outside the lock to avoid spurious wake-and-reblock.
+    activeCv_.notify_one();
 }
 
 void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* synth) {
@@ -92,13 +95,17 @@ void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* sy
         std::mutex& mu;
         int& count;
         std::condition_variable& cv;
-        ~SlotGuard() {
+        bool released = false;
+        ~SlotGuard() { Release(); }
+        void Release() {
+            if (released) return;
             {
                 std::lock_guard<std::mutex> lock(mu);
                 --count;
             }
             // Notify outside the lock to avoid spurious wake-and-reblock.
             cv.notify_one();
+            released = true;
         }
     } slotGuard{poolMutex_, activeCount_, activeCv_};
 

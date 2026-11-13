@@ -82,7 +82,7 @@ void RunEdgeDrmTests(testing::Context& ctx) {
 
         const std::string cookie = EdgeDRM::BuildCookieHeader();
         CHECK(ctx, cookie.rfind("muid=", 0) == 0);
-        CHECK(ctx, cookie.back() == ';');
+        CHECK(ctx, !cookie.empty() && cookie.back() == ';');
         CHECK_EQ_INT(ctx, cookie.size(), 5u + 32u + 1u);
     }
 

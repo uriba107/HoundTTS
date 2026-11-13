@@ -25,6 +25,9 @@ inline double GetSpeechTime(int length, double speed = 1.0,
         // SAPI rate: -10..+10 where 0 = normal.
         // Matches STTS.getSpeechTime and HOUND convention.
         {
+            // Clamp to the SAPI rate scale; an unclamped value produces an
+            // unbounded speedFactor and a nonsense duration estimate.
+            speed = std::max(-10.0, std::min(10.0, speed));
             const double maxRateRatio = 3.0;
             if (speed != 0.0) {
                 speedFactor = std::abs(speed) * (maxRateRatio - 1.0) / 10.0 + 1.0;

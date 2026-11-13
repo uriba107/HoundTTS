@@ -10,6 +10,13 @@ namespace HoundTTS {
 static void LogE(const std::string& msg) { Logger::Instance().Error("OpusFrameEncoder", msg); }
 
 bool OpusFrameEncoder::Init() {
+    // Destroy any encoder from a previous Init(): overwriting the raw pointer
+    // would leak the libopus state. Single-threaded by contract — one encoder
+    // instance is owned by its Opus worker thread.
+    if (m_encoder) {
+        opus_encoder_destroy(m_encoder);
+        m_encoder = nullptr;
+    }
     int err = 0;
     m_encoder = opus_encoder_create(kSampleRate, kChannels, OPUS_APPLICATION_VOIP, &err);
     if (err != OPUS_OK || !m_encoder) return false;

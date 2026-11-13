@@ -28,9 +28,9 @@ public:
     // speed:   rate multiplier (1.0 = normal; mapped to SSML prosody rate)
     // volume:  0.0..1.0 (applied as PCM sample scalar)
     // Returns true when at least one audio chunk was decoded and pushed.
-    // On a suspected 403 the attempt is retried once with a +5s clock-skew
-    // nudge; audio already pushed by the failed attempt is not withdrawn, so a
-    // retry after partial audio can enqueue the utterance twice.
+    // On a WebSocket connect failure (assumed 403/network) the attempt is
+    // retried once with a +5s clock-skew nudge. The retry happens before any
+    // audio is read or pushed, so the utterance is never enqueued twice.
     static bool SynthesizeToQueue(
         const std::string& text,
         const std::string& voice,

@@ -68,6 +68,10 @@ std::string AwsTranslate::Translate(
         LogE("AWS access_key, secret_key, or region not configured ([AWS] section in HoundTTS-credentials.ini)");
         return "";
     }
+    if (!AwsAuth::IsValidAwsRegion(region)) {
+        LogE("AWS region is not a valid AWS region: " + region);
+        return "";
+    }
     if (text.empty()) return "";
 
     std::string targetCode = LanguageToCode(language);

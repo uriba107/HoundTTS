@@ -203,11 +203,21 @@ bool PiperTTS::SynthesizeViaNative(
         return false;
     }
 
+    // Completion is signalled even if Resample/Push/allocation throws: a
+    // downstream consumer would otherwise block in PCMQueue::Pop() forever.
+    // MarkDone is idempotent, so the explicit call on the normal path is safe.
+    struct DoneGuard {
+        PCMQueue& q;
+        ~DoneGuard() noexcept {
+            try { q.MarkDone(); } catch (...) {}
+        }
+    } doneGuard{queue};
+
     // Return the synthesizer on every exit path — including a throw from
     // queue.Push() or a PCM allocation — so the active slot is never leaked.
     struct PoolGuard {
         PiperModelPool& pool;
-        const std::string& modelPath;
+        std::string modelPath;   // owned copy: self-contained guard
         piper_synthesizer* synth;
         // Runs during stack unwinding, so it must not throw: Release takes a
         // lock and allocates, either of which could otherwise call terminate.

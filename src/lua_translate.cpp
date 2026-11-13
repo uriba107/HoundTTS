@@ -47,7 +47,7 @@ static void RunTranslateWorker(std::shared_ptr<TranslateResult> slot, Work work)
     // not escape the extern "C" entry point; publish the failure into the slot
     // so l_getTranslationResult resolves instead of polling forever.
     try {
-        std::thread([slot, work = std::move(work)]() mutable {
+        HoundTTS::SpawnDetached([slot, work = std::move(work)]() mutable {
             std::string translated;
             std::string error;
             try {
@@ -61,11 +61,19 @@ static void RunTranslateWorker(std::shared_ptr<TranslateResult> slot, Work work)
                 error = "Unknown translation exception";
                 LogE(error);
             }
-            std::lock_guard<std::mutex> lk(slot->mtx);
-            slot->text  = std::move(translated);
-            slot->error = std::move(error);
-            slot->done  = true;   // published last, under the same lock
-        }).detach();
+            // Publishing allocates/locks; a throw here must not escape the
+            // detached thread (std::terminate would take DCS down).
+            try {
+                std::lock_guard<std::mutex> lk(slot->mtx);
+                slot->text  = std::move(translated);
+                slot->error = std::move(error);
+                slot->done  = true;   // published last, under the same lock
+            } catch (const std::exception& e) {
+                LogE(std::string("failed to publish translation result: ") + e.what());
+            } catch (...) {
+                LogE("failed to publish translation result: unknown exception");
+            }
+        });
     } catch (const std::exception& e) {
         std::string error = std::string("Translation thread creation failed: ") + e.what();
         LogE(error);

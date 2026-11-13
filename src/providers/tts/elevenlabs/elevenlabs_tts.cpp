@@ -9,7 +9,6 @@
 #include <sstream>
 #include <algorithm>
 #include <array>
-#include <cctype>
 
 namespace HoundTTS {
 
@@ -49,7 +48,7 @@ static std::string Base64Decode(const std::string& in) {
 // Accept only the characters ElevenLabs uses so a stray '&', '?', '#' or space
 // cannot rewrite the request.
 static bool IsSafeUrlToken(const std::string& s, const char* extraChars) {
-    if (s.empty() || s.size() > 128) return false;
+    if (!extraChars || s.empty() || s.size() > 128) return false;
     for (unsigned char c : s) {
         // Explicit ASCII check: std::isalnum is locale-dependent and would let
         // locale-specific letters into the request URL.

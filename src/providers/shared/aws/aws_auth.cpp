@@ -17,11 +17,29 @@ static const char* kTag = "HoundTTS/AwsAuth";
 static void LogE(const std::string& msg) { Logger::Instance().Error(kTag, msg); }
 
 std::string HexEncode(const unsigned char* data, size_t len) {
+    if (!data || len == 0) return "";
     std::ostringstream ss;
     ss << std::hex << std::setfill('0');
     for (size_t i = 0; i < len; ++i)
         ss << std::setw(2) << static_cast<int>(data[i]);
     return ss.str();
+}
+
+bool IsValidAwsRegion(const std::string& region) {
+    if (region.empty() || region.size() > 32) return false;
+    for (unsigned char c : region) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))
+            return false;
+    }
+    return true;
+}
+
+// CR/LF or other control characters in a value interpolated into the
+// Authorization header / canonical request: reject before signing.
+static bool HasControlChars(const std::string& s) {
+    for (unsigned char c : s)
+        if (c < 0x20 || c == 0x7F) return true;
+    return false;
 }
 
 std::string SHA256Hex(const std::string& data) {
@@ -90,6 +108,23 @@ std::string ComputeSigV4Auth(const std::string& accessKey,
                               const std::string& amzDate,
                               const std::string& dateStamp)
 {
+    // Fail closed on missing inputs: signing with empty credentials would
+    // otherwise emit a syntactically valid header and fail opaquely at runtime.
+    if (accessKey.empty() || secretKey.empty() || region.empty() ||
+        service.empty() || host.empty() || method.empty() ||
+        amzDate.empty() || dateStamp.empty()) {
+        LogE("SigV4: missing required input");
+        return "";
+    }
+    if (HasControlChars(accessKey) || HasControlChars(secretKey) ||
+        HasControlChars(region) || HasControlChars(service) ||
+        HasControlChars(host) || HasControlChars(method) ||
+        HasControlChars(uri) || HasControlChars(amzDate) ||
+        HasControlChars(dateStamp)) {
+        LogE("SigV4: control character in input");
+        return "";
+    }
+
     std::string canonicalHeaders =
         "host:" + host + "\n"
         "x-amz-date:" + amzDate + "\n";

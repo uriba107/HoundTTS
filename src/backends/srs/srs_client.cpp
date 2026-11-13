@@ -121,31 +121,39 @@ static void CALLBACK TimerProc(UINT, UINT, DWORD_PTR dwUser, DWORD_PTR, DWORD_PT
         ~CallbackGuard() { s->callbacks.fetch_sub(1, std::memory_order_seq_cst); }
     } callbackGuard{s};
 
-    if (s->stopping.load(std::memory_order_seq_cst)) return;
-    if (s->finished.load()) return;
+    // A throw out of a Windows multimedia-timer callback reaches the timer
+    // infrastructure and calls std::terminate, so nothing may escape.
+    try {
+        if (s->stopping.load(std::memory_order_seq_cst)) return;
+        if (s->finished.load()) return;
 
-    bool done = false;
-    auto frame = s->queue->Pop(0, &done);
+        bool done = false;
+        auto frame = s->queue->Pop(0, &done);
 
-    if (frame.empty()) {
-        if (done) {
-            s->finished.store(true);
-            return;
+        if (frame.empty()) {
+            if (done) {
+                s->finished.store(true);
+                return;
+            }
+            // Queue momentarily empty but producer still running — send silence
+            frame = s->silenceFrame;
         }
-        // Queue momentarily empty but producer still running — send silence
-        frame = s->silenceFrame;
+
+        auto packet = SRSClient::BuildVoicePacket(
+            frame, *s->freqs, s->unitId,
+            s->packetId.fetch_add(1), *s->guid);
+
+        sendto(s->udpSock,
+               reinterpret_cast<const char*>(packet.data()),
+               static_cast<int>(packet.size()),
+               0,
+               reinterpret_cast<const sockaddr*>(&s->udpAddr),
+               sizeof(s->udpAddr));
+    } catch (const std::exception& e) {
+        try { LogE(std::string("TimerProc exception: ") + e.what()); } catch (...) {}
+    } catch (...) {
+        try { LogE("TimerProc unknown exception"); } catch (...) {}
     }
-
-    auto packet = SRSClient::BuildVoicePacket(
-        frame, *s->freqs, s->unitId,
-        s->packetId.fetch_add(1), *s->guid);
-
-    sendto(s->udpSock,
-           reinterpret_cast<const char*>(packet.data()),
-           static_cast<int>(packet.size()),
-           0,
-           reinterpret_cast<const sockaddr*>(&s->udpAddr),
-           sizeof(s->udpAddr));
 }
 
 // ---------------------------------------------------------------------------
@@ -471,20 +479,27 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         TimerState* state;
         std::shared_ptr<SRSPositionData> posData;
         ~StreamCleanup() {
-            if (timerId) {
-                // Publish the stop first, then kill: a callback that has already
-                // started sees `stopping` and returns without touching `state`.
-                // timeKillEvent does not abort a callback in flight, so wait for
-                // the counter to drain before `state` (a stack local) dies.
-                state->stopping.store(true, std::memory_order_seq_cst);
-                timeKillEvent(timerId);
-                for (int i = 0; i < 2000 && state->callbacks.load() != 0; ++i)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            timeEndPeriod(1);
-            if (posData) {
-                std::lock_guard<std::mutex> lk(posData->syncMutex);
-                posData->sendPositionSync = nullptr;
+            // Runs during stack unwinding too: nothing may throw out of it.
+            try {
+                if (timerId) {
+                    // Publish the stop first, then kill: a callback that has already
+                    // started sees `stopping` and returns without touching `state`.
+                    // timeKillEvent does not abort a callback in flight, so wait for
+                    // the counter to drain before `state` (a stack local) dies.
+                    state->stopping.store(true, std::memory_order_seq_cst);
+                    timeKillEvent(timerId);
+                    for (int i = 0; i < 2000 && state->callbacks.load() != 0; ++i)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                timeEndPeriod(1);
+                if (posData) {
+                    std::lock_guard<std::mutex> lk(posData->syncMutex);
+                    posData->sendPositionSync = nullptr;
+                }
+            } catch (const std::exception& e) {
+                try { LogE(std::string("StreamCleanup exception: ") + e.what()); } catch (...) {}
+            } catch (...) {
+                try { LogE("StreamCleanup unknown exception"); } catch (...) {}
             }
         }
     } streamCleanup{timerId, &state, posData};
@@ -528,8 +543,16 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
             std::lock_guard<std::mutex> lk(posData->syncMutex);
             bool heartbeatDue = (posData->lastSentAt.time_since_epoch().count() == 0) ||
                                 (now - posData->lastSentAt >= std::chrono::seconds(175));
-            if (heartbeatDue && posData->sendPositionSync)
-                posData->sendPositionSync();
+            if (heartbeatDue && posData->sendPositionSync) {
+                // A failed position update must not abort the whole stream.
+                try {
+                    posData->sendPositionSync();
+                } catch (const std::exception& e) {
+                    try { LogE(std::string("position sync failed: ") + e.what()); } catch (...) {}
+                } catch (...) {
+                    try { LogE("position sync failed: unknown exception"); } catch (...) {}
+                }
+            }
         }
     }
 
@@ -572,8 +595,9 @@ std::vector<uint8_t> SRSClient::BuildVoicePacket(
     WriteLE16(p,     audioLen);  p += 2;
     WriteLE16(p,     freqLen);   p += 2;
 
-    // Audio bytes
-    std::memcpy(p, opusFrame.data(), audioLen);
+    // Audio bytes (std::memcpy with a null source is UB even when size is 0)
+    if (audioLen > 0 && !opusFrame.empty())
+        std::memcpy(p, opusFrame.data(), audioLen);
     p += audioLen;
 
     // Frequencies

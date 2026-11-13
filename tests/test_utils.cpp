@@ -53,6 +53,11 @@ void RunUtilsTests(testing::Context& ctx) {
         CHECK_STR_EQ(ctx, Utils::JsonDecodeString("\\uD800\"", 0), "?");
         // Truncated escape at end of buffer
         CHECK_STR_EQ(ctx, Utils::JsonDecodeString("\\u12", 0), "?");
+        // Truncated escape immediately before the closing quote: the quote must
+        // still terminate the string and endPos must stay accurate.
+        size_t endPos = 999;
+        CHECK_STR_EQ(ctx, Utils::JsonDecodeString("\"\\u12\"", 1, &endPos), "?");
+        CHECK_EQ_INT(ctx, endPos, 6);
         // Non-hex digits: the '?' replaces the escape, the leftover literal
         // characters stay (?ZZ, not ?) — that is the documented behaviour.
         CHECK_STR_EQ(ctx, Utils::JsonDecodeString("\\u12ZZ\"", 0), "?ZZ");

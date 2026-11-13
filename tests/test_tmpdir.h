@@ -9,7 +9,9 @@
 #endif
 #include <windows.h>
 
+#include <atomic>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 
 namespace testing {
@@ -17,13 +19,17 @@ namespace testing {
 class TempDir {
 public:
     explicit TempDir(const std::string& leaf) {
-        static int counter = 0;
+        static std::atomic<int> counter{0};
         path_ = std::filesystem::temp_directory_path() /
                 ("houndtts-test-" + std::to_string(::GetCurrentProcessId()) + "-" +
                  std::to_string(++counter) + "-" + leaf);
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);
-        std::filesystem::create_directories(path_);
+        if (ec)
+            throw std::runtime_error("TempDir: remove_all failed: " + ec.message());
+        std::filesystem::create_directories(path_, ec);
+        if (ec)
+            throw std::runtime_error("TempDir: create_directories failed: " + ec.message());
     }
 
     ~TempDir() {

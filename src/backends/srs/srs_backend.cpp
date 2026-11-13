@@ -10,12 +10,21 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <atomic>
 
 namespace HoundTTS {
 
 static const char* kTag = "HoundTTS/SRSBackend";
 static void LogE(const std::string& msg) { Logger::Instance().Error(kTag, msg); }
 static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
+
+// Logging from a catch handler must not throw: building the message allocates,
+// and an exception escaping a detached thread calls std::terminate.
+static void LogFail(const char* msg, const std::exception* e = nullptr) noexcept {
+    try {
+        LogE(e ? std::string(msg) + ": " + e->what() : std::string(msg));
+    } catch (...) {}
+}
 
 bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                            const TransmitParams& params) {
@@ -51,10 +60,15 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         { std::lock_guard<std::mutex> lk(session->backendMutex); session->backendData = posData; }
     }
 
-    std::thread([pcm, host, port, freqs, coalition, name, unitId,
+    SpawnDetached([pcm, host, port, freqs, coalition, name, unitId,
                  session, posData, eamPassword]() {
         // Opus-encode PCM as it arrives from the pipeline
         auto opusQueue = std::make_shared<AudioQueue>();
+        // Set by cleanup() so the encoder thread stops consuming PCM when the
+        // stream aborts early (e.g. connect/handshake failure). Without it the
+        // encoder keeps encoding into a queue nobody drains until the producer
+        // finishes, which can grow unbounded.
+        auto stopEncoder = std::make_shared<std::atomic<bool>>(false);
 
         // Shared teardown: clears SRS position-sync callback, drains the opus
         // queue, detaches backend data, flags the session dead, and removes it
@@ -64,6 +78,7 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
             // Called from catch handlers too: nothing may escape the handler,
             // or std::terminate takes DCS down.
             try {
+                stopEncoder->store(true);
                 opusQueue->MarkDone();
                 if (posData) { std::lock_guard<std::mutex> lk(posData->syncMutex); posData->sendPositionSync = nullptr; }
                 if (session) {
@@ -72,9 +87,9 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                     HoundTTS::SessionManager::Instance().Remove(session->id);
                 }
             } catch (const std::exception& e) {
-                LogE(std::string("SRS cleanup exception: ") + e.what());
+                LogFail("SRS cleanup exception", &e);
             } catch (...) {
-                LogE("SRS cleanup unknown exception");
+                LogFail("SRS cleanup unknown exception");
             }
         };
 
@@ -82,14 +97,14 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         // DCS, skipping cleanup() (leaving the session registered). Catch it,
         // log, and still run cleanup.
         try {
-            std::thread([pcm, opusQueue]() {
+            SpawnDetached([pcm, opusQueue, stopEncoder]() {
                 try {
                     OpusFrameEncoder encoder;
                     if (!encoder.Init()) {
                         LogE("OpusFrameEncoder::Init() failed");
                     } else {
                         bool done = false;
-                        while (!done) {
+                        while (!done && !stopEncoder->load()) {
                             std::vector<int16_t> chunk = pcm->Pop(500, &done);
                             if (!chunk.empty())
                                 encoder.EncodeChunk(chunk.data(), static_cast<int>(chunk.size()), *opusQueue);
@@ -97,12 +112,12 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                         encoder.Flush(*opusQueue);
                     }
                 } catch (const std::exception& e) {
-                    LogE(std::string("Opus encode exception: ") + e.what());
+                    LogFail("Opus encode exception", &e);
                 } catch (...) {
-                    LogE("Opus encode unknown exception");
+                    LogFail("Opus encode unknown exception");
                 }
                 opusQueue->MarkDone(); // always signal completion to the streamer
-            }).detach();
+            });
 
             // Connect + handshake + stream
             SRSClient client;
@@ -124,14 +139,14 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
 
             cleanup();
         } catch (const std::exception& e) {
-            LogE(std::string("SRS worker exception: ") + e.what());
+            LogFail("SRS worker exception", &e);
             cleanup();
         } catch (...) {
-            LogE("SRS worker unknown exception");
+            LogFail("SRS worker unknown exception");
             cleanup();
         }
 
-    }).detach();
+    });
 
     return true;
 }

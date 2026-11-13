@@ -30,9 +30,10 @@ uint32_t Rd32(const std::vector<uint8_t>& v, size_t o) {
 }
 
 uint64_t Rd64(const std::vector<uint8_t>& v, size_t o) {
+    // Little-endian, matching WriteLE64 in BuildVoicePacket (and Rd16/Rd32).
     uint64_t out = 0;
-    for (int i = 7; i >= 0; --i) {
-        out = (out << 8) | static_cast<uint64_t>(v[o + static_cast<size_t>(i)]);
+    for (int i = 0; i < 8; ++i) {
+        out |= static_cast<uint64_t>(v[o + static_cast<size_t>(i)]) << (8 * i);
     }
     return out;
 }

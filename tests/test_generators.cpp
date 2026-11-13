@@ -89,7 +89,6 @@ void RunGeneratorTests(testing::Context& ctx) {
     }
 
     CASE(ctx, "GenerateTone survives NaN/inf frequency and volume") {
-        const double nan = std::numeric_limits<double>::quiet_NaN();
         const float fnan = std::numeric_limits<float>::quiet_NaN();
         const float finf = std::numeric_limits<float>::infinity();
 
@@ -99,7 +98,6 @@ void RunGeneratorTests(testing::Context& ctx) {
 
         const std::vector<int16_t> pcm2 = RunTone(0.02, finf, fnan);
         CHECK_EQ_INT(ctx, pcm2.size(), 320);
-        (void)nan;
     }
 
     CASE(ctx, "GenerateTone falls back to 2 s for a non-positive duration") {

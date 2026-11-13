@@ -31,7 +31,7 @@ Native C++17 DLL (`HoundTTS.dll`) that exposes TTS and translation functions to 
 - C++17, static CRT (`/MT`), self-contained DLL with no VCRUNTIME dependency
 - **No `ITTSProvider` interface.** Providers are static classes — each exposes `SynthesizeToQueue(...)` with a provider-specific signature. Dispatch is a `TtsProvider` enum (`src/provider.h`) + if/else chain in `tts_pipeline.cpp`.
 - SapiTTS is **synchronous** — returns `std::vector<int16_t>` (inline, no thread). All other providers are **asynchronous** — accept `PCMQueue&` and run in a detached thread.
-- Threads are **always detached**, never joined — fire-and-forget throughout all 20+ spawn sites.
+- Spawn worker threads with `HoundTTS::SpawnDetached(...)` (fire-and-forget, detached); never write `std::thread(...).detach()` directly — a throwing `detach()` leaves a joinable temporary whose destructor calls `std::terminate`.
 - Session IDs are 22-char Base57 SRS GUIDs (`Utils::GenerateSRSGuid`, `src/utils.cpp`).
 - PCM flow: Provider → `PaddedPCMQueue` → `CachingPCMQueue` → `PCMQueue` → SRS backend transmits.
 - `CachingPCMQueue` (`pcm_cache.h`) tees PCM to both the downstream queue and an accumulator for cache insert on `Finalize()`.
