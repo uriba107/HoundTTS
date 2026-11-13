@@ -102,12 +102,26 @@ struct TimerState {
     sockaddr_in                  udpAddr;
     std::atomic<uint64_t>        packetId{0};
     std::atomic<bool>            finished{false};
+    // Teardown coordination: the callback registers itself before touching any
+    // other member, and StreamFromQueue waits for in-flight callbacks before the
+    // state object (a stack local) goes away.
+    std::atomic<int>             callbacks{0};
+    std::atomic<bool>            stopping{false};
     // Pre-encoded silence frame (sent when queue is momentarily empty)
     std::vector<uint8_t>         silenceFrame;
 };
 
 static void CALLBACK TimerProc(UINT, UINT, DWORD_PTR dwUser, DWORD_PTR, DWORD_PTR) {
     auto* s = reinterpret_cast<TimerState*>(dwUser);
+    // Register before touching anything else: StreamFromQueue kills the timer
+    // and then waits for this counter to drain before destroying the state.
+    s->callbacks.fetch_add(1, std::memory_order_seq_cst);
+    struct CallbackGuard {
+        TimerState* s;
+        ~CallbackGuard() { s->callbacks.fetch_sub(1, std::memory_order_seq_cst); }
+    } callbackGuard{s};
+
+    if (s->stopping.load(std::memory_order_seq_cst)) return;
     if (s->finished.load()) return;
 
     bool done = false;
@@ -449,17 +463,37 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         TimerProc,
         reinterpret_cast<DWORD_PTR>(&state),
         TIME_PERIODIC);
+    // Releases the multimedia timer, restores the timer period and clears the
+    // position callback on every exit path — including an exception thrown by
+    // the send/wait loop below, which would otherwise leak all three.
+    struct StreamCleanup {
+        MMRESULT timerId;
+        TimerState* state;
+        std::shared_ptr<SRSPositionData> posData;
+        ~StreamCleanup() {
+            if (timerId) {
+                // Publish the stop first, then kill: a callback that has already
+                // started sees `stopping` and returns without touching `state`.
+                // timeKillEvent does not abort a callback in flight, so wait for
+                // the counter to drain before `state` (a stack local) dies.
+                state->stopping.store(true, std::memory_order_seq_cst);
+                timeKillEvent(timerId);
+                for (int i = 0; i < 2000 && state->callbacks.load() != 0; ++i)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            timeEndPeriod(1);
+            if (posData) {
+                std::lock_guard<std::mutex> lk(posData->syncMutex);
+                posData->sendPositionSync = nullptr;
+            }
+        }
+    } streamCleanup{timerId, &state, posData};
     if (timerId == 0) {
         // No timer → nothing will ever drain the queue or set state.finished.
         // Abort cleanly instead of spinning forever in the wait loop below.
         LogE("timeSetEvent() failed — aborting SRS stream");
         state.finished.store(true);
         queue.MarkDone();
-        timeEndPeriod(1);
-        if (posData) {
-            std::lock_guard<std::mutex> lk(posData->syncMutex);
-            posData->sendPositionSync = nullptr;
-        }
         return;
     }
 
@@ -499,14 +533,8 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         }
     }
 
-    if (timerId) timeKillEvent(timerId);
-    timeEndPeriod(1);
-
-    // Clear position-sync callback — client is about to disconnect
-    if (posData) {
-        std::lock_guard<std::mutex> lk(posData->syncMutex);
-        posData->sendPositionSync = nullptr;
-    }
+    // Timer, timer period and the position callback are released by
+    // streamCleanup's destructor on scope exit.
 }
 
 void SRSClient::Disconnect() {

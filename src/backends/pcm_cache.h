@@ -140,13 +140,13 @@ public:
     }
 
     void Push(std::vector<int16_t> chunk) override {
-        {
-            std::lock_guard<std::mutex> lock(accMutex_);
-            if (finalized_.load(std::memory_order_acquire)) return;  // late push after finalize
-            accumulator_.insert(accumulator_.end(), chunk.begin(), chunk.end());
-        }
-        // Re-check before forwarding: MarkDone() may have already been delivered.
-        if (finalized_.load(std::memory_order_acquire)) return;
+        // Hold accMutex_ across the downstream forward: Finalize() swaps the
+        // accumulator under the same lock, so releasing it between the append
+        // and the forward would let Finalize() cache a chunk that Push then
+        // drops as "already finalized" — cached audio that was never played.
+        std::lock_guard<std::mutex> lock(accMutex_);
+        if (finalized_.load(std::memory_order_acquire)) return;  // late push after finalize
+        accumulator_.insert(accumulator_.end(), chunk.begin(), chunk.end());
         // Forward to downstream consumer (downstream handles its own locking)
         downstream_->Push(std::move(chunk));
     }
@@ -158,6 +158,7 @@ public:
     void MarkDone() override {
         if (doneForwarded_.exchange(true, std::memory_order_acq_rel)) return;
         downstream_->MarkDone();
+        PCMQueue::MarkDone();  // this queue's own m_done, per the PCMQueue contract
     }
 
     // Latch the "failed" flag; any subsequent Finalize() will skip cache

@@ -161,6 +161,17 @@ std::vector<int16_t> SapiTTS::Synthesize(
 {
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool coInited = (hrCo == S_OK || hrCo == S_FALSE);
+    // Uninitialise on every path: an exception below must not leak the
+    // apartment for this thread.
+    struct CoGuard {
+        bool active;
+        ~CoGuard() {
+            if (active) {
+                CoFreeUnusedLibrariesEx(0, 0);
+                CoUninitialize();
+            }
+        }
+    } coGuard{coInited};
     std::vector<int16_t> result;
 
     do {
@@ -229,15 +240,15 @@ std::vector<int16_t> SapiTTS::Synthesize(
         // Strip the RIFF/WAVE container that ISpStream prepends; keep raw PCM only.
         size_t pcmBytes = 0;
         const size_t pcmOffset = PcmDataOffset(pData, byteCount, pcmBytes);
+        // Unlock on every path: the sample copy allocates and can throw.
+        struct UnlockGuard {
+            HGLOBAL h;
+            ~UnlockGuard() { GlobalUnlock(h); }
+        } unlockGuard{hg};
         result = Utils::PcmBytesToSamples(
             static_cast<const uint8_t*>(pData) + pcmOffset, pcmBytes);
-        GlobalUnlock(hg);
     } while (false);
 
-    if (coInited) {
-        CoFreeUnusedLibrariesEx(0, 0);
-        CoUninitialize();
-    }
     return result;
 }
 

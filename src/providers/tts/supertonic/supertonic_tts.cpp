@@ -191,8 +191,15 @@ public:
         int rc = SupertonicNative::Instance().Synthesize(
             ctx, text, lang, steps, speed, &chunk);
         if (rc == SUPERTONIC_OK && chunk.samples && chunk.num_samples > 0) {
-            out_pcm.assign(chunk.samples, chunk.samples + chunk.num_samples);
-            out_sample_rate = chunk.sample_rate;
+            // assign() can throw (bad_alloc); the native buffer must still be
+            // released, and the exception must still reach the caller.
+            try {
+                out_pcm.assign(chunk.samples, chunk.samples + chunk.num_samples);
+                out_sample_rate = chunk.sample_rate;
+            } catch (...) {
+                SupertonicNative::Instance().FreeResult(&chunk);
+                throw;
+            }
         }
         SupertonicNative::Instance().FreeResult(&chunk);
         return rc;
@@ -305,6 +312,21 @@ bool SupertonicTTS::SynthesizeToQueue(
     // Acquire concurrency slot (blocks if at max)
     pool.AcquireSlot(maxConcurrent);
 
+    // Release the slot on every path, including exceptions thrown below — a
+    // leaked slot permanently reduces maxConcurrent and eventually wedges all
+    // synthesis. Release() is called explicitly once the audio is converted so
+    // completion work (resample, Push, MarkDone) does not hold a slot.
+    struct SlotGuard {
+        SupertonicPool& pool;
+        bool released = false;
+        ~SlotGuard() { if (!released) pool.ReleaseSlot(); }
+        void Release() {
+            if (released) return;
+            released = true;
+            pool.ReleaseSlot();
+        }
+    } slotGuard{pool};
+
     // Atomic style-load + synthesize + copy-out. The float PCM is copied
     // under the style mutex, so ctx->result_buf is protected against
     // concurrent overwrites by another slot.
@@ -315,7 +337,6 @@ bool SupertonicTTS::SynthesizeToQueue(
         floatPcm, sampleRate);
 
     if (rc != SUPERTONIC_OK || floatPcm.empty()) {
-        pool.ReleaseSlot();
         LogE("supertonic_synthesize failed");
         queue.MarkDone();
         return false;
@@ -333,7 +354,10 @@ bool SupertonicTTS::SynthesizeToQueue(
             std::numeric_limits<int16_t>::max()));
     }
 
-    pool.ReleaseSlot();
+    // Free the concurrency slot before the completion work below: resample,
+    // Push and MarkDone must not occupy a slot. After this point a throw is
+    // simply propagated — the slot is already back in the pool.
+    slotGuard.Release();
 
     // Resample to 16kHz
     if (sampleRate != 16000)

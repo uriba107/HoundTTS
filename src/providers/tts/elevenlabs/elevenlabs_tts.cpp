@@ -51,7 +51,10 @@ static std::string Base64Decode(const std::string& in) {
 static bool IsSafeUrlToken(const std::string& s, const char* extraChars) {
     if (s.empty() || s.size() > 128) return false;
     for (unsigned char c : s) {
-        if (std::isalnum(c) != 0) continue;
+        // Explicit ASCII check: std::isalnum is locale-dependent and would let
+        // locale-specific letters into the request URL.
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+            continue;
         bool allowed = false;
         for (const char* p = extraChars; *p; ++p)
             if (*p == static_cast<char>(c)) { allowed = true; break; }

@@ -42,6 +42,17 @@ static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
 static void LogW(const std::string& msg) { Logger::Instance().Error(kTag, "[WARNING] " + msg); }
 static void LogD(const std::string& msg) { Logger::Instance().Debug(kTag, msg); }
 
+// Logging from inside a catch handler must not throw: building the message
+// allocates, and a throw while unwinding a detached thread calls std::terminate.
+// LogFail is noexcept and swallows any failure of the logging call itself.
+static void LogFail(const char* msg, const std::exception* e = nullptr) noexcept {
+    try {
+        LogE(e ? std::string(msg) + ": " + e->what() : std::string(msg));
+    } catch (...) {
+        // A failure path may not fail again.
+    }
+}
+
 void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue) {
     if (!queue) {
         LogE("Produce called with a null PCM queue; aborting");
@@ -63,15 +74,15 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
                 try {
                     queue->Push(std::vector<int16_t>(cached->begin(), cached->end()));
                 } catch (const std::exception& e) {
-                    LogE(std::string("PCM cache replay failed: ") + e.what());
+                    LogFail("PCM cache replay failed", &e);
                 } catch (...) {
-                    LogE("PCM cache replay failed: unknown exception");
+                    LogFail("PCM cache replay failed: unknown exception");
                 }
                 // Guarded too: nothing may escape a detached thread.
                 try {
                     queue->MarkDone();
                 } catch (...) {
-                    LogE("PCM cache replay: MarkDone failed");
+                    LogFail("PCM cache replay: MarkDone failed");
                 }
             }).detach();
             return;
@@ -109,9 +120,9 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         try {
             cachingQueue->Finalize(ok);
         } catch (const std::exception& e) {
-            LogE(std::string("PCM cache finalize failed: ") + e.what());
+            LogFail("PCM cache finalize failed", &e);
         } catch (...) {
-            LogE("PCM cache finalize failed: unknown exception");
+            LogFail("PCM cache finalize failed: unknown exception");
         }
     };
 
@@ -120,14 +131,19 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
     // exception escaping a detached thread is std::terminate. Both calls are
     // individually guarded, so `complete` never throws.
     auto complete = [dispatchQueue, finalizeCache](bool ok) {
+        bool completed = true;
         try {
             dispatchQueue->MarkDone();
         } catch (const std::exception& e) {
-            LogE(std::string("PCM queue completion failed: ") + e.what());
+            LogFail("PCM queue completion failed", &e);
+            completed = false;
         } catch (...) {
-            LogE("PCM queue completion failed: unknown exception");
+            LogFail("PCM queue completion failed: unknown exception");
+            completed = false;
         }
-        finalizeCache(ok);
+        // Never commit a buffer whose completion failed: the downstream queue
+        // may be missing the tail silence, and the cache would replay it.
+        finalizeCache(ok && completed);
     };
 
     TtsProvider  provider  = req.provider;
@@ -456,8 +472,19 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             LogE("SAPI synthesis threw: unknown exception");
         }
         bool ok = !pcm.empty();
-        if (ok)
-            dispatchQueue->Push(std::move(pcm));
+        if (ok) {
+            // Push allocates and can throw; complete(ok) must still run, or the
+            // queue is never completed and the cache is never finalized.
+            try {
+                dispatchQueue->Push(std::move(pcm));
+            } catch (const std::exception& e) {
+                LogE(std::string("PCM queue push failed: ") + e.what());
+                ok = false;
+            } catch (...) {
+                LogE("PCM queue push failed: unknown exception");
+                ok = false;
+            }
+        }
         complete(ok);
 
     } else {
@@ -471,8 +498,17 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
             LogE("SAPI fallback threw: unknown exception");
         }
         bool ok = !pcm.empty();
-        if (ok)
-            dispatchQueue->Push(std::move(pcm));
+        if (ok) {
+            try {
+                dispatchQueue->Push(std::move(pcm));
+            } catch (const std::exception& e) {
+                LogE(std::string("PCM queue push failed: ") + e.what());
+                ok = false;
+            } catch (...) {
+                LogE("PCM queue push failed: unknown exception");
+                ok = false;
+            }
+        }
         complete(ok);
     }
 }

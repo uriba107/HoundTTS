@@ -19,6 +19,11 @@ static void LogI(const std::string& msg) { Logger::Instance().Info(kTag, msg); }
 
 bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                            const TransmitParams& params) {
+    if (!pcm) {
+        LogE("Transmit called with a null PCM queue; aborting");
+        return false;
+    }
+
     std::vector<FreqMod> freqs = ParseFreqMods(params.freqs, params.modulations,
                                                params.encrypt, params.encKey);
 
@@ -56,12 +61,20 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         // from the manager. Called from every exit path (success or failure)
         // so there is exactly one cleanup sequence.
         auto cleanup = [&]() {
-            opusQueue->MarkDone();
-            if (posData) { std::lock_guard<std::mutex> lk(posData->syncMutex); posData->sendPositionSync = nullptr; }
-            if (session) {
-                session->alive.store(false);
-                { std::lock_guard<std::mutex> lk(session->backendMutex); session->backendData.reset(); }
-                HoundTTS::SessionManager::Instance().Remove(session->id);
+            // Called from catch handlers too: nothing may escape the handler,
+            // or std::terminate takes DCS down.
+            try {
+                opusQueue->MarkDone();
+                if (posData) { std::lock_guard<std::mutex> lk(posData->syncMutex); posData->sendPositionSync = nullptr; }
+                if (session) {
+                    session->alive.store(false);
+                    { std::lock_guard<std::mutex> lk(session->backendMutex); session->backendData.reset(); }
+                    HoundTTS::SessionManager::Instance().Remove(session->id);
+                }
+            } catch (const std::exception& e) {
+                LogE(std::string("SRS cleanup exception: ") + e.what());
+            } catch (...) {
+                LogE("SRS cleanup unknown exception");
             }
         };
 

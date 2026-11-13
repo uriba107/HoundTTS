@@ -98,6 +98,10 @@ std::string AwsTranslate::Translate(
     std::string authHeader = AwsAuth::ComputeSigV4Auth(
         accessKey, secretKey, region, "translate", host,
         "POST", "/", body, amzDate, dateStamp);
+    if (authHeader.empty()) {
+        LogE("SigV4 signing failed (empty Authorization header)");
+        return "";
+    }
 
     httplib::SSLClient cli(host, 443);
     cli.set_connection_timeout(10);

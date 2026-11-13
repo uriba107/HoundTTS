@@ -87,7 +87,11 @@ std::string JsonDecodeString(const std::string& s, size_t pos, size_t* endPos) {
         case 'r':  out += '\r'; break;
         case 't':  out += '\t'; break;
         case 'u': {
-            if (pos + 4 > s.size()) { out += '?'; break; }
+            if (pos + 4 > s.size()) {
+                out += '?';
+                pos = s.size();   // truncated escape: nothing left to decode
+                break;
+            }
             unsigned int cp = 0;
             bool ok = true;
             for (int i = 0; i < 4; ++i) {
@@ -95,7 +99,14 @@ std::string JsonDecodeString(const std::string& s, size_t pos, size_t* endPos) {
                 if (v < 0) { ok = false; break; }
                 cp = (cp << 4) | static_cast<unsigned int>(v);
             }
-            if (!ok) { out += '?'; break; }
+            if (!ok) {
+                // Consume the hex digits actually present so the malformed
+                // escape does not leak into the decoded string verbatim.
+                out += '?';
+                for (int i = 0; i < 4 && pos < s.size() && HexDigit(s[pos]) >= 0; ++i)
+                    ++pos;
+                break;
+            }
             pos += 4;
 
             // Combine a UTF-16 surrogate pair into one code point.
@@ -133,7 +144,9 @@ std::string JsonDecodeString(const std::string& s, size_t pos, size_t* endPos) {
 bool IsAlphaLanguageCode(const std::string& code) {
     if (code.size() < 2 || code.size() > 3) return false;
     for (unsigned char c : code) {
-        if (std::isalpha(c) == 0) return false;
+        // Explicit ASCII check: std::isalpha is locale-dependent and could
+        // accept non-ASCII letters from Lua into request bodies/URLs.
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return false;
     }
     return true;
 }

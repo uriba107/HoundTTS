@@ -209,7 +209,17 @@ bool PiperTTS::SynthesizeViaNative(
         PiperModelPool& pool;
         const std::string& modelPath;
         piper_synthesizer* synth;
-        ~PoolGuard() { pool.Release(modelPath, synth); }
+        // Runs during stack unwinding, so it must not throw: Release takes a
+        // lock and allocates, either of which could otherwise call terminate.
+        ~PoolGuard() noexcept {
+            try {
+                pool.Release(modelPath, synth);
+            } catch (const std::exception& e) {
+                LogE(std::string("PoolGuard::Release failed: ") + e.what());
+            } catch (...) {
+                LogE("PoolGuard::Release failed: unknown exception");
+            }
+        }
     } guard{pool, modelPath, synth};
 
     // Resolve speaker ID (numeric or named, with bounds check and name fallback)

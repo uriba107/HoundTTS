@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <sstream>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <algorithm>
 
@@ -25,6 +26,10 @@ static std::string XmlEscape(const std::string& s)
     std::string out;
     out.reserve(s.size());
     for (char c : s) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        // XML 1.0 allows only tab, LF and CR below 0x20; anything else is a
+        // parse error, so drop it rather than send malformed SSML.
+        if (uc < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
         switch (c) {
             case '&':  out += "&amp;";  break;
             case '<':  out += "&lt;";   break;
@@ -93,9 +98,18 @@ static bool Synthesize(
         return false;
     }
 
-    // If the caller already provided a full SSML document, use it directly
+    // If the caller already provided a full SSML document, use it directly.
+    // Match the AWS/Google detection: skip leading whitespace and require a tag
+    // boundary so "<speaker ..." or "<speakfoo" are treated as plain text.
+    size_t ssmlOff = 0;
+    while (ssmlOff < text.size() && std::isspace(static_cast<unsigned char>(text[ssmlOff])))
+        ++ssmlOff;
     std::string ssml;
-    bool isSsml = (text.size() >= 6 && text.compare(0, 6, "<speak") == 0);
+    bool isSsml = (text.size() - ssmlOff >= 6 &&
+                   text.compare(ssmlOff, 6, "<speak") == 0 &&
+                   (text.size() - ssmlOff == 6 ||
+                    text[ssmlOff + 6] == '>' ||
+                    std::isspace(static_cast<unsigned char>(text[ssmlOff + 6]))));
     if (isSsml)
         ssml = text;
     else

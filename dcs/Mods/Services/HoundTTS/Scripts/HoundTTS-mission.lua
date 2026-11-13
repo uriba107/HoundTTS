@@ -299,6 +299,13 @@ function HoundTTS.Transmit(message, transmission_params, provider_params, transl
         }
     )
 
+    -- The DLL reports a synchronous failure as (nil, error-message): the error
+    -- text sits in the session-id slot, so surface it as an error rather than
+    -- letting callers treat it as an id.
+    if result == nil then
+        return nil, sessionId
+    end
+
     if sessionId and (isDcsUnit(tp.dcsObject) or isStaticObject(tp.dcsObject)) then
         addTrackingSession(sessionId,tp.dcsObject)
     end
@@ -357,7 +364,13 @@ function HoundTTS.TextToSpeech(message, freqs, modulations, volume, name,
         }
     )
 
-    return result or _dll_getSpeechTime(message, speed, provider)
+    -- STTS compatibility: the estimated speech time is what callers wait on.
+    -- A nil result means the DLL never started the transmission, so report 0
+    -- instead of an estimate for audio that will never play.
+    if type(result) ~= "number" then
+        return 0
+    end
+    return result
 end
 
 -- -------------------------------------------------------------------------

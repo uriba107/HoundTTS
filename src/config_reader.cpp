@@ -138,7 +138,8 @@ void ConfigReader::ParseIni(const std::string& content) {
 
         // Strip inline comments, but never inside a quoted value: a ';' or '#'
         // in a quoted URL/token/path is part of the value, not a comment.
-        // A '#' only starts a comment when preceded by whitespace.
+        // A '#' only starts a comment when it is the whole value's start
+        // (followed by whitespace or end-of-line) or preceded by whitespace.
         size_t scanFrom = 0;
         if (!val.empty() && (val.front() == '"' || val.front() == '\'')) {
             size_t close = val.find(val.front(), 1);
@@ -146,7 +147,11 @@ void ConfigReader::ParseIni(const std::string& content) {
         }
         for (size_t i = scanFrom; i < val.size(); ++i) {
             char c = val[i];
-            if (c == ';' || (c == '#' && i > 0 && (val[i - 1] == ' ' || val[i - 1] == '\t'))) {
+            const bool hashComment =
+                (c == '#') &&
+                ((i > 0 && (val[i - 1] == ' ' || val[i - 1] == '\t')) ||
+                 (i == 0 && (val.size() == 1 || val[1] == ' ' || val[1] == '\t')));
+            if (c == ';' || hashComment) {
                 val = Trim(val.substr(0, i));
                 break;
             }

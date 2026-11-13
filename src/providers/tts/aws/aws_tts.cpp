@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <sstream>
 #include <ctime>
+#include <cmath>
+#include <cctype>
 #include <algorithm>
 
 namespace HoundTTS {
@@ -16,6 +18,26 @@ namespace HoundTTS {
 static const char* kTag = "HoundTTS/Polly";
 static void LogE(const std::string& msg) { HoundTTS::Logger::Instance().Error(kTag, msg); }
 static void LogI(const std::string& msg) { HoundTTS::Logger::Instance().Info(kTag, msg); }
+
+// Escape XML special characters before interpolating plain text into SSML.
+// Polly parses the request `Text` as SSML, so a bare '&' or '<' in the source
+// text would produce a 400 instead of speech.
+static std::string XmlEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&':  out += "&amp;";  break;
+            case '<':  out += "&lt;";   break;
+            case '>':  out += "&gt;";   break;
+            case '"':  out += "&quot;"; break;
+            case '\'': out += "&apos;"; break;
+            default:   out += c;        break;
+        }
+    }
+    return out;
+}
 
 static std::string DefaultVoice(const std::string& culture, const std::string& gender) {
     bool male = (gender == "male");
@@ -78,8 +100,11 @@ bool AwsTTS::SynthesizeToQueue(
         inputText = Utils::JsonEscape(text);
         textType = "ssml";
     } else if (std::abs(speed - 1.0) > 0.01) {
-        inputText = "<speak><prosody rate='" + SpeedToRate(speed) + "'>" +
-                    Utils::JsonEscape(text) + "</prosody></speak>";
+        // Plain text wrapped in SSML: XML-escape it first, then JSON-escape the
+        // finished document for the request body (the isSsml path is already XML).
+        inputText = Utils::JsonEscape(
+            "<speak><prosody rate='" + SpeedToRate(speed) + "'>" +
+            XmlEscape(text) + "</prosody></speak>");
         textType = "ssml";
     } else {
         inputText = Utils::JsonEscape(text);
@@ -93,7 +118,7 @@ bool AwsTTS::SynthesizeToQueue(
                << "\"VoiceId\":\"" << Utils::JsonEscape(voiceId) << "\","
                << "\"OutputFormat\":\"pcm\","
                << "\"SampleRate\":\"16000\","
-               << "\"Engine\":\"" << eng << "\""
+               << "\"Engine\":\"" << Utils::JsonEscape(eng) << "\""
                << "}";
     std::string body = bodyStream.str();
 
@@ -114,6 +139,11 @@ bool AwsTTS::SynthesizeToQueue(
     std::string authHeader = AwsAuth::ComputeSigV4Auth(
         accessKey, secretKey, region, "polly", host,
         "POST", "/v1/speech", body, amzDate, dateStamp);
+    if (authHeader.empty()) {
+        LogE("SigV4 signing failed (empty Authorization header)");
+        queue.MarkDone();
+        return false;
+    }
 
     httplib::SSLClient cli(host, 443);
     cli.set_connection_timeout(10);
@@ -150,10 +180,8 @@ bool AwsTTS::SynthesizeToQueue(
     LogI("Received " + std::to_string(len) + " bytes of PCM");
 
     size_t sampleBytes = (len / 2) * 2;
-    if (sampleBytes > 0) {
-        const int16_t* src = reinterpret_cast<const int16_t*>(data);
-        int sampleCount = static_cast<int>(sampleBytes / 2);
-        std::vector<int16_t> samples(src, src + sampleCount);
+    std::vector<int16_t> samples = Utils::PcmBytesToSamples(data, sampleBytes);
+    if (!samples.empty()) {
         if (volume < 1.0) {
             double vol = std::max(0.0, std::min(1.0, volume));
             for (auto& s : samples)

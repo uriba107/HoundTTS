@@ -69,6 +69,9 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
         o.life    = o.maxLife;
     }
 
+    // std::min/std::max propagate NaN, and NaN -> int16_t is UB when the chunk
+    // is built, so clamp a non-finite volume exactly like tone.cpp does.
+    if (!std::isfinite(volume)) volume = 1.0f;
     float vol = std::max(0.0f, std::min(1.0f, volume));
 
     // Noise floor dominates — oscillators add spectral density.

@@ -43,25 +43,42 @@ static std::unordered_map<int, std::shared_ptr<TranslateResult>> s_trResults;
 // l_getTranslationResult.
 template <typename Work>
 static void RunTranslateWorker(std::shared_ptr<TranslateResult> slot, Work work) {
-    std::thread([slot, work = std::move(work)]() mutable {
-        std::string translated;
-        std::string error;
-        try {
-            translated = work();
-            if (translated.empty())
-                error = "Translation failed (check Logs\\HoundTTS.log for details)";
-        } catch (const std::exception& e) {
-            error = std::string("Translation exception: ") + e.what();
-            LogE(error);
-        } catch (...) {
-            error = "Unknown translation exception";
-            LogE(error);
-        }
+    // Thread creation can fail (std::system_error / std::bad_alloc) and must
+    // not escape the extern "C" entry point; publish the failure into the slot
+    // so l_getTranslationResult resolves instead of polling forever.
+    try {
+        std::thread([slot, work = std::move(work)]() mutable {
+            std::string translated;
+            std::string error;
+            try {
+                translated = work();
+                if (translated.empty())
+                    error = "Translation failed (check Logs\\HoundTTS.log for details)";
+            } catch (const std::exception& e) {
+                error = std::string("Translation exception: ") + e.what();
+                LogE(error);
+            } catch (...) {
+                error = "Unknown translation exception";
+                LogE(error);
+            }
+            std::lock_guard<std::mutex> lk(slot->mtx);
+            slot->text  = std::move(translated);
+            slot->error = std::move(error);
+            slot->done  = true;   // published last, under the same lock
+        }).detach();
+    } catch (const std::exception& e) {
+        std::string error = std::string("Translation thread creation failed: ") + e.what();
+        LogE(error);
         std::lock_guard<std::mutex> lk(slot->mtx);
-        slot->text  = std::move(translated);
         slot->error = std::move(error);
-        slot->done  = true;   // published last, under the same lock
-    }).detach();
+        slot->done  = true;
+    } catch (...) {
+        const char* error = "Translation thread creation failed: unknown exception";
+        LogE(error);
+        std::lock_guard<std::mutex> lk(slot->mtx);
+        slot->error = error;
+        slot->done  = true;
+    }
 }
 
 } // namespace

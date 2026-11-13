@@ -38,6 +38,12 @@ std::vector<unsigned char> HmacSHA256(const std::vector<unsigned char>& key,
 {
     unsigned char out[EVP_MAX_MD_SIZE];
     unsigned int outLen = 0;
+    if (key.empty()) {
+        // Empty key only reachable via a prior failure; fail closed instead of
+        // relying on OpenSSL's handling of a null key pointer.
+        LogE("HMAC-SHA256: empty key");
+        return {};
+    }
     if (!HMAC(EVP_sha256(),
               key.data(), static_cast<int>(key.size()),
               reinterpret_cast<const unsigned char*>(data.data()), data.size(),
@@ -60,10 +66,16 @@ std::vector<unsigned char> DeriveSigningKey(const std::string& secretKey,
                                              const std::string& region,
                                              const std::string& service)
 {
-    auto kDate    = HmacSHA256("AWS4" + secretKey, date);
-    auto kRegion  = HmacSHA256(kDate,              region);
-    auto kService = HmacSHA256(kRegion,            service);
-    auto kSigning = HmacSHA256(kService,           "aws4_request");
+    // Propagate a failure at any step: HMAC with an empty key would otherwise
+    // succeed and mask the broken chain, defeating ComputeSigV4Auth's
+    // fail-closed empty-key check.
+    auto kDate = HmacSHA256("AWS4" + secretKey, date);
+    if (kDate.empty()) return {};
+    auto kRegion = HmacSHA256(kDate, region);
+    if (kRegion.empty()) return {};
+    auto kService = HmacSHA256(kRegion, service);
+    if (kService.empty()) return {};
+    auto kSigning = HmacSHA256(kService, "aws4_request");
     return kSigning;
 }
 
