@@ -4,6 +4,7 @@
 #include "lua_translate.h"
 #include "utils.h"
 
+#include <exception>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -13,13 +14,22 @@
 // ---------------------------------------------------------------------------
 static int l_init(lua_State* L) {
     const char* writedir = luaL_checkstring(L, 1);
-    HoundTTS::ConfigReader::Instance().Load(std::string(writedir));
-    HoundTTS::Logger::Instance().Init(std::string(writedir));
-    std::string lvl = HoundTTS::ConfigReader::Instance().GetLogLevel();
-    HoundTTS::LogLevel logLvl = HoundTTS::LogLevel::LEVEL_ERROR;
-    if (lvl == "debug" || lvl == "DEBUG") logLvl = HoundTTS::LogLevel::LEVEL_DEBUG;
-    else if (lvl == "info" || lvl == "INFO") logLvl = HoundTTS::LogLevel::LEVEL_INFO;
-    HoundTTS::Logger::Instance().SetLevel(logLvl);
+    // A C++ exception must never unwind across the Lua C API boundary (UB).
+    try {
+        HoundTTS::ConfigReader::Instance().Load(std::string(writedir));
+        HoundTTS::Logger::Instance().Init(std::string(writedir));
+        std::string lvl = HoundTTS::ConfigReader::Instance().GetLogLevel();
+        HoundTTS::LogLevel logLvl = HoundTTS::LogLevel::LEVEL_ERROR;
+        if (lvl == "debug" || lvl == "DEBUG") logLvl = HoundTTS::LogLevel::LEVEL_DEBUG;
+        else if (lvl == "info" || lvl == "INFO") logLvl = HoundTTS::LogLevel::LEVEL_INFO;
+        HoundTTS::Logger::Instance().SetLevel(logLvl);
+    } catch (const std::exception& e) {
+        HoundTTS::Logger::Instance().Error("HoundTTS/init", std::string("init failed: ") + e.what());
+        return luaL_error(L, "HoundTTS.init failed: %s", e.what());
+    } catch (...) {
+        HoundTTS::Logger::Instance().Error("HoundTTS/init", "init failed: unknown exception");
+        return luaL_error(L, "HoundTTS.init failed: unknown exception");
+    }
     return 0;
 }
 

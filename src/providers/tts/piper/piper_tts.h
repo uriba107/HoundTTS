@@ -14,6 +14,8 @@ static constexpr const char* PIPER_DEFAULT_VOICE = "en_US-lessac-low";
 
 // Synthesizes text via piper.dll (preferred) or piper.exe subprocess (deprecated fallback).
 // Pushes 16kHz mono int16 PCM chunks into queue. Calls queue.MarkDone() on completion.
+// Thread-safe: concurrent calls are expected (piper.dll is loaded once under a lock, the
+// model pool bounds concurrent synthesizers, the voice registry is mutex-guarded).
 class PiperTTS {
 public:
     // modelPath: path to .onnx model file
@@ -33,6 +35,7 @@ public:
 
     // Initialize Piper subsystem (voice registry, etc).
     // Safe to call multiple times; lazy initialization on first call.
+    // The first voicesPath wins — later calls with a different path are no-ops.
     static void EnsureInitialized(const std::string& voicesPath);
 
 private:

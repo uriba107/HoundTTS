@@ -24,7 +24,11 @@ public:
     // Returns true if piper.dll is loaded and ready.
     bool Available() const;
 
-    // Wrapped piper.h C API — only call if Available() is true.
+    // Wrapped piper.h C API. Each wrapper re-checks the resolved export under
+    // mutex_ and is a no-op / returns a safe sentinel (nullptr, {} or
+    // PIPER_ERR_GENERIC) when piper.dll is not available, so callers do not have
+    // to prove Available() first. The underlying piper functions are still not
+    // thread-safe per synthesizer — see PiperModelPool for the concurrency model.
     piper_synthesizer* Create(const char* modelPath, const char* configPath,
                               const char* espeakDataPath);
     void               Free(piper_synthesizer* synth);

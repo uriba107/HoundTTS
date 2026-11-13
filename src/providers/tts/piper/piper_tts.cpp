@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
@@ -202,6 +203,25 @@ bool PiperTTS::SynthesizeViaNative(
         return false;
     }
 
+    // Return the synthesizer on every exit path — including a throw from
+    // queue.Push() or a PCM allocation — so the active slot is never leaked.
+    struct PoolGuard {
+        PiperModelPool& pool;
+        const std::string& modelPath;
+        piper_synthesizer* synth;
+        // Runs during stack unwinding, so it must not throw: Release takes a
+        // lock and allocates, either of which could otherwise call terminate.
+        ~PoolGuard() noexcept {
+            try {
+                pool.Release(modelPath, synth);
+            } catch (const std::exception& e) {
+                LogE(std::string("PoolGuard::Release failed: ") + e.what());
+            } catch (...) {
+                LogE("PoolGuard::Release failed: unknown exception");
+            }
+        }
+    } guard{pool, modelPath, synth};
+
     // Resolve speaker ID (numeric or named, with bounds check and name fallback)
     std::string modelJson = ReadModelJson(modelPath);
     int speakerId = ResolveSpeakerId(modelJson, speaker);
@@ -218,7 +238,6 @@ bool PiperTTS::SynthesizeViaNative(
     int rc = pool.StartSynthesize(synth, text.c_str(), &opts);
     if (rc != PIPER_OK) {
         LogE("piper_synthesize_start failed: " + std::to_string(rc));
-        pool.Release(modelPath, synth);
         queue.MarkDone();
         return false;
     }
@@ -263,7 +282,6 @@ bool PiperTTS::SynthesizeViaNative(
         LogE("native synthesis failed after " + std::to_string(totalSamples) + " samples");
     else
         LogI("native synthesis complete, total output samples: " + std::to_string(totalSamples));
-    pool.Release(modelPath, synth);
     queue.MarkDone();
     return !failed;
 }
@@ -373,8 +391,9 @@ bool PiperTTS::SynthesizeViaSubprocess(
         ApplyVolume(chunk, volume);
         queue.Push(std::move(chunk));
         size_t remainder = leftover.size() - sampleBytes;
-        if (remainder > 0) leftover = {leftover.end() - (int)remainder, leftover.end()};
-        else leftover.clear();
+        // Keep only the trailing partial sample (0 or 1 byte) for the next read.
+        leftover.erase(leftover.begin(),
+                       leftover.end() - static_cast<std::ptrdiff_t>(remainder));
     }
 
     LogI("total PCM bytes: " + std::to_string(totalPcmBytes));

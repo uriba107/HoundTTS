@@ -8,9 +8,11 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# Least privilege: workflow default is read-only. Jobs that need to write
+# (deps image push, GitHub Release) grant that scope at the job level.
 permissions:
-  contents: write
-  packages: write
+  contents: read
+  packages: read
 
 env:
   DEPS_IMAGE: ghcr.io/uriba107/houndtts/houndtts-deps-win
@@ -25,6 +27,9 @@ jobs:
     name: Build All
     runs-on: windows-2022
     timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
     outputs:
       cache-tag: ${{ steps.cache-tag.outputs.TAG }}
       version: ${{ steps.version.outputs.VERSION }}
@@ -317,6 +322,9 @@ jobs:
     needs: [build-all]
     if: startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: read
 
     steps:
       - name: Download base package

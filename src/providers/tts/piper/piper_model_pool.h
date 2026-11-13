@@ -36,7 +36,9 @@ public:
                                const std::string& espeakDataPath);
 
     // Return a synthesizer to the pool for reuse.
-    // Must be called with the same modelPath used in Acquire().
+    // Must be called exactly once per successful Acquire(), with the same
+    // modelPath used in Acquire() — that key selects the reuse bucket, and the
+    // active-slot count is decremented here.
     void Release(const std::string& modelPath, piper_synthesizer* synth);
 
     // Serialize a piper_synthesize_start call under the espeak-ng global mutex.
@@ -44,7 +46,9 @@ public:
     int StartSynthesize(piper_synthesizer* synth, const char* text,
                         const piper_synthesize_options* options);
 
-    // Free all pooled synthesizers. Called on shutdown.
+    // Free idle pooled synthesizers. Does NOT touch activeCount_ and does NOT
+    // free checked-out handles: those are owned by the caller until Release()
+    // returns them (freeing them here would be a use-after-free).
     void Clear();
 
 private:

@@ -12,10 +12,14 @@ namespace HoundTTS {
 // Synthesizes text via Google Cloud Text-to-Speech REST API.
 // Uses a service-account JSON file for OAuth2 authentication.
 // Requests LINEAR16 (16kHz mono PCM) → pushes raw PCM chunks to PCMQueue.
-// Calls queue.MarkDone() when done (success or failure).
+// Calls queue.MarkDone() on every normal return path (success or failure);
+// TTSPipeline's dispatch catch-all delivers MarkDone if this throws.
 class GoogleTTS {
 public:
-    // credsFile: path to Google service-account JSON (from [Google] credentials_file)
+    // credsFile: path to Google service-account JSON (from [Google] credentials_file).
+    //            Secret: file contents (private key) are never logged or returned
+    //            to Lua; only the path may appear in an error log. Missing,
+    //            unreadable, or non-service-account JSON fails the call.
     // voice:     full voice name e.g. "en-US-Wavenet-D" (optional; uses languageCode default if empty)
     // culture:   BCP-47 locale e.g. "en-US"
     // gender:    "male" | "female" | "neutral"

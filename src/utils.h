@@ -11,6 +11,8 @@
 #include <condition_variable>
 #include <atomic>
 #include <memory>
+#include <vector>
+#include <cstdint>
 #include <windows.h>
 
 namespace HoundTTS {
@@ -46,6 +48,11 @@ public:
 
     void Init(const std::string& writedir) {
         if (writedir.empty()) return;
+        std::lock_guard<std::mutex> initLock(initMu_);
+        // Idempotent: l_init() may be called again (mission reload). A second
+        // queue would leak a writer thread and interleave writes to the file.
+        if (std::atomic_load(&queue_)) return;
+
         std::string path = writedir;
         if (path.back() != '\\' && path.back() != '/') path += '\\';
         path += "Logs\\HoundTTS.log";
@@ -53,7 +60,7 @@ public:
         auto q = std::make_shared<LogQueue>();
         q->logPath = path;
         q->alive.store(true);
-        queue_ = q;
+        std::atomic_store(&queue_, q);
 
         // Writer thread owns a shared_ptr — state survives even if
         // Logger is destroyed first (DLL unload order).
@@ -99,7 +106,7 @@ public:
     }
 
     ~Logger() {
-        auto q = queue_;
+        auto q = std::atomic_load(&queue_);
         if (q) {
             q->alive.store(false);
             q->cv.notify_one();
@@ -120,7 +127,7 @@ private:
         // Lock-free — always visible in DebugView / attached debugger
         OutputDebugStringA(line.c_str());
         // Enqueue for file write (fast: only a deque push under lock)
-        auto q = queue_;
+        auto q = std::atomic_load(&queue_);
         if (!q || !q->alive.load()) return;
         {
             std::lock_guard<std::mutex> lk(q->mu);
@@ -129,7 +136,8 @@ private:
         q->cv.notify_one();
     }
 
-    std::shared_ptr<LogQueue> queue_;
+    std::shared_ptr<LogQueue> queue_;   // published via std::atomic_store (Init)
+    std::mutex                initMu_;  // serializes Init
     std::atomic<LogLevel>     level_{LogLevel::LEVEL_ERROR};
 };
 
@@ -138,6 +146,27 @@ namespace Utils {
 // Generate a 22-character base57 UUID string compatible with SRS GUIDs.
 // Uses CoCreateGuid for the random source.
 std::string GenerateSRSGuid();
+
+// Escape a UTF-8 string for embedding inside a JSON string literal.
+// Handles ", \, \b, \f, \n, \r, \t and every other C0 control character
+// (emitted as \u00XX). Bytes >= 0x20 are copied verbatim (UTF-8 passthrough).
+std::string JsonEscape(const std::string& s);
+
+// Decode the body of a JSON string literal, starting just after the opening
+// quote at `pos`. Handles all short escapes plus \uXXXX, combining UTF-16
+// surrogate pairs into a single code point. Lone surrogates become '?'.
+// If `endPos` is non-null it receives the index of the closing quote (or
+// s.size() when the string is unterminated).
+std::string JsonDecodeString(const std::string& s, size_t pos,
+                             size_t* endPos = nullptr);
+
+// True when `code` is a plausible ISO 639-1/2 language code: 2-3 ASCII letters.
+// Used to reject arbitrary Lua strings before they reach a request body/URL.
+bool IsAlphaLanguageCode(const std::string& code);
+
+// Copy little-endian int16 PCM bytes into a sample vector. memcpy avoids the
+// alignment/strict-aliasing UB of casting a byte buffer to const int16_t*.
+std::vector<int16_t> PcmBytesToSamples(const void* data, size_t byteCount);
 
 // Convert UTF-8 std::string to wide string
 inline std::wstring Utf8ToWide(const std::string& str) {

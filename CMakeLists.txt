@@ -190,3 +190,82 @@ install(TARGETS HoundTTS
     LIBRARY DESTINATION .
 )
 install(DIRECTORY dcs/ DESTINATION dcs)
+
+# ---------------------------------------------------------------------------
+# Host-side unit tests (no DCS, no Lua runtime, no network).
+#
+# Covers the pure logic that a DCS test mission cannot localise: INI parsing,
+# provider aliases, request-key/LRU cache behaviour, queue padding contracts,
+# SRS packet/JSON layout, SigV4 + Edge DRM token maths, generators.
+#
+# Off by default so a plain build stays lean; Dockerfile.windows turns it on and
+# runs ctest in the build stage, which makes a failing check a failing build.
+# ---------------------------------------------------------------------------
+option(HOUNDTTS_BUILD_TESTS "Build and register the host-side unit tests" OFF)
+
+if(HOUNDTTS_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(houndtts_tests
+        # Test cases
+        tests/test_main.cpp
+        tests/test_provider.cpp
+        tests/test_speech_time.cpp
+        tests/test_srs_types.cpp
+        tests/test_utils.cpp
+        tests/test_config_reader.cpp
+        tests/test_pcm_queue.cpp
+        tests/test_pcm_cache.cpp
+        tests/test_generators.cpp
+        tests/test_srs_packet.cpp
+        tests/test_aws_auth.cpp
+        tests/test_edge_drm.cpp
+        tests/test_voice_registry.cpp
+        tests/test_opus_encoder.cpp
+        # Production sources under test (compiled directly; the DLL keeps its own)
+        src/utils.cpp
+        src/config_reader.cpp
+        src/backends/pcm_cache.cpp
+        src/backends/srs/srs_client.cpp
+        src/providers/generators/tone.cpp
+        src/providers/generators/noise.cpp
+        src/providers/shared/aws/aws_auth.cpp
+        src/providers/tts/edge/edge_drm.cpp
+        src/providers/tts/piper/piper_voice_registry.cpp
+        src/codecs/opus_encoder.cpp
+    )
+
+    target_include_directories(houndtts_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/src"
+    )
+
+    target_compile_definitions(houndtts_tests PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+    )
+
+    target_link_libraries(houndtts_tests PRIVATE
+        ${OPUS_TARGET}
+        ${OPENSSL_CRYPTO_LIB}
+        nlohmann_json::nlohmann_json
+        ws2_32
+        ole32
+        advapi32
+        bcrypt
+        crypt32
+    )
+
+    if(MSVC)
+        # Same static CRT as the DLL: the VC redist is not guaranteed on a
+        # build/test machine either.
+        target_compile_options(houndtts_tests PRIVATE /MT /W3 /wd4996 /wd4267 /MP)
+        target_link_options(houndtts_tests PRIVATE
+            /NODEFAULTLIB:MSVCRT
+            /NODEFAULTLIB:MSVCRTD
+        )
+    endif()
+
+    add_test(NAME houndtts_tests COMMAND houndtts_tests)
+endif()

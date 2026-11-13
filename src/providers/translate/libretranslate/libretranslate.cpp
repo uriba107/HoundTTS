@@ -41,8 +41,8 @@ static std::string LanguageToCode(const std::string& language) {
     auto it = kMap.find(lower);
     if (it != kMap.end()) return it->second;
 
-    // If already a short code (2–3 chars), pass through
-    if (lower.size() >= 2 && lower.size() <= 3) return lower;
+    // If already a short code (2–3 ASCII letters), pass through
+    if (Utils::IsAlphaLanguageCode(lower)) return lower;
 
     LogE("Unknown language name: \"" + language + "\" — pass an ISO 639-1 code or add it to the map");
     return "";
@@ -51,19 +51,6 @@ static std::string LanguageToCode(const std::string& language) {
 // ---------------------------------------------------------------------------
 // JSON helpers
 // ---------------------------------------------------------------------------
-static std::string JsonEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if (c == '"')       out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else if (c == '\t') out += "\\t";
-        else                out += c;
-    }
-    return out;
-}
-
 // Extract "translatedText" field value from LibreTranslate JSON response:
 // {"translatedText":"<value>"}
 static std::string ExtractTranslatedText(const std::string& json) {
@@ -72,24 +59,7 @@ static std::string ExtractTranslatedText(const std::string& json) {
     if (pos == std::string::npos) return "";
     pos = json.find('"', pos + key.size());
     if (pos == std::string::npos) return "";
-    ++pos;
-    std::string out;
-    while (pos < json.size()) {
-        char c = json[pos++];
-        if (c == '\\' && pos < json.size()) {
-            char e = json[pos++];
-            if      (e == 'n') out += '\n';
-            else if (e == 'r') out += '\r';
-            else if (e == 't') out += '\t';
-            else if (e == 'u' && pos + 3 < json.size()) { out += '?'; pos += 4; }
-            else               out += e;
-        } else if (c == '"') {
-            break;
-        } else {
-            out += c;
-        }
-    }
-    return out;
+    return Utils::JsonDecodeString(json, pos + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -156,13 +126,13 @@ std::string LibreTranslate::Translate(
     // alternatives=0 suppresses unused alternative translations.
     std::ostringstream body;
     body << "{"
-         << "\"q\":\""          << JsonEscape(text) << "\","
+         << "\"q\":\""          << Utils::JsonEscape(text) << "\","
          << "\"source\":\""    << srcCode << "\","
          << "\"target\":\""     << targetCode << "\","
          << "\"format\":\"text\","
          << "\"alternatives\":0";
     if (!apiKey.empty())
-        body << ",\"api_key\":\"" << JsonEscape(apiKey) << "\"";
+        body << ",\"api_key\":\"" << Utils::JsonEscape(apiKey) << "\"";
     body << "}";
 
     std::string bodyStr = body.str();

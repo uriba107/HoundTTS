@@ -14,6 +14,10 @@ namespace HoundTTS {
 // speed:    rate value (interpretation depends on provider)
 inline double GetSpeechTime(int length, double speed = 1.0,
                             TtsProvider provider = TtsProvider::Sapi) {
+    if (length <= 0) return 0.0;
+    // NaN/inf would poison the switch below (NaN fails every comparison).
+    if (!std::isfinite(speed)) speed = (provider == TtsProvider::Sapi) ? 0.0 : 1.0;
+
     double speedFactor = 1.0;
 
     switch (provider) {

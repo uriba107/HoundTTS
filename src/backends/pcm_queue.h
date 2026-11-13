@@ -91,16 +91,36 @@ public:
         : downstream_(std::move(downstream)), padSamples_(padSamples) {}
 
     void Push(std::vector<int16_t> chunk) override {
+        // Push and MarkDone may arrive from different threads (e.g. a killed
+        // session signalling completion while the producer still pushes).
+        // Serialize them so tail silence/completion cannot overtake a chunk.
+        std::lock_guard<std::mutex> lock(opMutex_);
+        if (doneSent_.load(std::memory_order_acquire)) return;  // late push after completion
         if (!leadInSent_.exchange(true))
             downstream_->Push(std::vector<int16_t>(padSamples_, 0));
         downstream_->Push(std::move(chunk));
     }
 
     void MarkDone() override {
-        if (!doneSent_.exchange(true)) {
-            if (leadInSent_.load())
-                downstream_->Push(std::vector<int16_t>(padSamples_, 0));
-            downstream_->MarkDone();
+        {
+            std::lock_guard<std::mutex> lock(opMutex_);
+            if (!doneSent_.exchange(true)) {
+                // Forwarding allocates (tail silence) and may throw. Our own
+                // m_done must still be set first, or a consumer blocks in
+                // Pop() forever; the caller re-logs the rethrown exception.
+                try {
+                    if (leadInSent_.load())
+                        downstream_->Push(std::vector<int16_t>(padSamples_, 0));
+                    downstream_->MarkDone();
+                } catch (...) {
+                    // Completion must still reach the consumer even if the
+                    // forward failed: best-effort downstream, then ourselves,
+                    // then let the caller log the original exception.
+                    try { downstream_->MarkDone(); } catch (...) {}
+                    PCMQueue::MarkDone();
+                    throw;
+                }
+            }
         }
         PCMQueue::MarkDone();
     }
@@ -108,6 +128,7 @@ public:
 private:
     std::shared_ptr<PCMQueue> downstream_;
     int padSamples_;
+    std::mutex opMutex_;   // serializes Push/MarkDone forwarding
     std::atomic<bool> leadInSent_{false};
     std::atomic<bool> doneSent_{false};
 };

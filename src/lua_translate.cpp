@@ -27,6 +27,7 @@ static void LogE(const std::string& msg) { HoundTTS::Logger::Instance().Error(kT
 namespace {
 
 struct TranslateResult {
+    std::mutex  mtx;    // protects done/text/error
     bool        done  = false;
     std::string text;   // translated text (empty on error)
     std::string error;  // non-empty on failure
@@ -35,6 +36,50 @@ struct TranslateResult {
 static std::atomic<int>                                          s_nextId{1};
 static std::mutex                                                s_trMutex;
 static std::unordered_map<int, std::shared_ptr<TranslateResult>> s_trResults;
+
+// Run a provider translation on a detached thread and publish the outcome.
+// A detached thread must never let an exception escape (std::terminate would
+// take DCS down), and the slot lock publishes done/text/error atomically to
+// l_getTranslationResult.
+template <typename Work>
+static void RunTranslateWorker(std::shared_ptr<TranslateResult> slot, Work work) {
+    // Thread creation can fail (std::system_error / std::bad_alloc) and must
+    // not escape the extern "C" entry point; publish the failure into the slot
+    // so l_getTranslationResult resolves instead of polling forever.
+    try {
+        std::thread([slot, work = std::move(work)]() mutable {
+            std::string translated;
+            std::string error;
+            try {
+                translated = work();
+                if (translated.empty())
+                    error = "Translation failed (check Logs\\HoundTTS.log for details)";
+            } catch (const std::exception& e) {
+                error = std::string("Translation exception: ") + e.what();
+                LogE(error);
+            } catch (...) {
+                error = "Unknown translation exception";
+                LogE(error);
+            }
+            std::lock_guard<std::mutex> lk(slot->mtx);
+            slot->text  = std::move(translated);
+            slot->error = std::move(error);
+            slot->done  = true;   // published last, under the same lock
+        }).detach();
+    } catch (const std::exception& e) {
+        std::string error = std::string("Translation thread creation failed: ") + e.what();
+        LogE(error);
+        std::lock_guard<std::mutex> lk(slot->mtx);
+        slot->error = std::move(error);
+        slot->done  = true;
+    } catch (...) {
+        const char* error = "Translation thread creation failed: unknown exception";
+        LogE(error);
+        std::lock_guard<std::mutex> lk(slot->mtx);
+        slot->error = error;
+        slot->done  = true;
+    }
+}
 
 } // namespace
 
@@ -80,32 +125,26 @@ int l_translateAsync(lua_State* L) {
         std::string chatModel = cfg.GetOpenAIChatModel();
         LogD("translateAsync: openai endpoint=" + endpoint + " model=" + chatModel);
 
-        std::thread([slot, msg, lang, endpoint, apiKey, chatModel]() {
+        RunTranslateWorker(slot, [msg, lang, endpoint, apiKey, chatModel]() {
             LogD("translateAsync/openai thread: started");
             std::string translated = HoundTTS::OpenAIChat::Translate(
                 msg, lang, endpoint, apiKey, chatModel);
-            slot->error = translated.empty()
-                ? "Translation failed (check Logs\\HoundTTS.log for details)" : "";
-            slot->text  = translated.empty() ? "" : std::move(translated);
-            slot->done  = true;
             LogD("translateAsync/openai thread: done, success=" + std::to_string(!translated.empty()));
-        }).detach();
+            return translated;
+        });
         LogD("translateAsync: openai thread detached");
 
     } else if (provider == HoundTTS::TranslateProvider::Google) {
         std::string credsFile = cfg.GetGoogleCredsFile();
         LogD("translateAsync: google credsFile=" + credsFile);
 
-        std::thread([slot, msg, lang, credsFile]() {
+        RunTranslateWorker(slot, [msg, lang, credsFile]() {
             LogD("translateAsync/google thread: started");
             std::string translated = HoundTTS::GoogleTranslate::Translate(
                 msg, lang, credsFile);
-            slot->error = translated.empty()
-                ? "Translation failed (check Logs\\HoundTTS.log for details)" : "";
-            slot->text  = translated.empty() ? "" : std::move(translated);
-            slot->done  = true;
             LogD("translateAsync/google thread: done, success=" + std::to_string(!translated.empty()));
-        }).detach();
+            return translated;
+        });
         LogD("translateAsync: google thread detached");
 
     } else if (provider == HoundTTS::TranslateProvider::LibreTranslate) {
@@ -113,16 +152,13 @@ int l_translateAsync(lua_State* L) {
         std::string apiKey   = cfg.GetLibreTranslateApiKey();
         LogD("translateAsync: libre endpoint=" + endpoint);
 
-        std::thread([slot, msg, lang, src_lang, endpoint, apiKey]() {
+        RunTranslateWorker(slot, [msg, lang, src_lang, endpoint, apiKey]() {
             LogD("translateAsync/libre thread: started");
             std::string translated = HoundTTS::LibreTranslate::Translate(
                 msg, lang, endpoint, apiKey, src_lang);
-            slot->error = translated.empty()
-                ? "Translation failed (check Logs\\HoundTTS.log for details)" : "";
-            slot->text  = translated.empty() ? "" : std::move(translated);
-            slot->done  = true;
             LogD("translateAsync/libre thread: done, success=" + std::to_string(!translated.empty()));
-        }).detach();
+            return translated;
+        });
         LogD("translateAsync: libre thread detached");
 
     } else if (provider == HoundTTS::TranslateProvider::AWS) {
@@ -131,16 +167,13 @@ int l_translateAsync(lua_State* L) {
         std::string region    = cfg.GetAwsRegion();
         LogD("translateAsync: aws region=" + region);
 
-        std::thread([slot, msg, lang, accessKey, secretKey, region]() {
+        RunTranslateWorker(slot, [msg, lang, accessKey, secretKey, region]() {
             LogD("translateAsync/aws thread: started");
             std::string translated = HoundTTS::AwsTranslate::Translate(
                 msg, lang, accessKey, secretKey, region);
-            slot->error = translated.empty()
-                ? "Translation failed (check Logs\\HoundTTS.log for details)" : "";
-            slot->text  = translated.empty() ? "" : std::move(translated);
-            slot->done  = true;
             LogD("translateAsync/aws thread: done, success=" + std::to_string(!translated.empty()));
-        }).detach();
+            return translated;
+        });
         LogD("translateAsync: aws thread detached");
 
     } else if (provider == HoundTTS::TranslateProvider::Azure) {
@@ -148,16 +181,13 @@ int l_translateAsync(lua_State* L) {
         std::string azureRegion = cfg.GetAzureRegion();
         LogD("translateAsync: azure region=" + azureRegion);
 
-        std::thread([slot, msg, lang, azureKey, azureRegion]() {
+        RunTranslateWorker(slot, [msg, lang, azureKey, azureRegion]() {
             LogD("translateAsync/azure thread: started");
             std::string translated = HoundTTS::AzureTranslate::Translate(
                 msg, lang, azureKey, azureRegion);
-            slot->error = translated.empty()
-                ? "Translation failed (check Logs\\HoundTTS.log for details)" : "";
-            slot->text  = translated.empty() ? "" : std::move(translated);
-            slot->done  = true;
             LogD("translateAsync/azure thread: done, success=" + std::to_string(!translated.empty()));
-        }).detach();
+            return translated;
+        });
         LogD("translateAsync: azure thread detached");
 
     } else {
@@ -205,7 +235,19 @@ int l_getTranslationResult(lua_State* L) {
         slot = it->second;
     }
 
-    if (!slot->done) {
+    bool        done = false;
+    std::string text;
+    std::string error;
+    {
+        std::lock_guard<std::mutex> lk(slot->mtx);
+        done  = slot->done;
+        if (done) {
+            text  = slot->text;
+            error = slot->error;
+        }
+    }
+
+    if (!done) {
         LogD("getTranslationResult: id=" + std::to_string(id) + " still pending");
         lua_pushnil(L);
         return 1;
@@ -217,12 +259,12 @@ int l_getTranslationResult(lua_State* L) {
         s_trResults.erase(id);
     }
 
-    if (!slot->error.empty()) {
+    if (!error.empty()) {
         lua_pushnil(L);
-        lua_pushstring(L, slot->error.c_str());
+        lua_pushstring(L, error.c_str());
         return 2;
     }
 
-    lua_pushstring(L, slot->text.c_str());
+    lua_pushstring(L, text.c_str());
     return 1;
 }

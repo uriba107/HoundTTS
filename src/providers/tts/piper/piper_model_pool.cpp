@@ -44,10 +44,27 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
     // piper_create internally calls espeak_Initialize which is safe to call
     // multiple times; guard under espeakMutex_ for safety during init.
     piper_synthesizer* synth = nullptr;
-    {
+    try {
         std::lock_guard<std::mutex> lock(espeakMutex_);
         LogI("Loading model: " + modelPath);
         synth = native.Create(modelPath.c_str(), nullptr, espeakDataPath.c_str());
+    } catch (const std::exception& e) {
+        // Give the reserved slot back, otherwise Acquire() starves permanently.
+        LogE(std::string("piper_create threw for model: ") + modelPath + ": " + e.what());
+        {
+            std::lock_guard<std::mutex> lock(poolMutex_);
+            --activeCount_;
+        }
+        activeCv_.notify_one();
+        throw;
+    } catch (...) {
+        LogE("piper_create threw for model: " + modelPath + ": unknown exception");
+        {
+            std::lock_guard<std::mutex> lock(poolMutex_);
+            --activeCount_;
+        }
+        activeCv_.notify_one();
+        throw;
     }
 
     if (!synth) {
@@ -67,19 +84,43 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
 
 void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* synth) {
     if (!synth) return;
-    {
+
+    // The active slot must be released on every path — including a throwing
+    // idle-queue insertion (allocation), which would otherwise permanently
+    // reduce the pool's concurrency and starve Acquire().
+    struct SlotGuard {
+        std::mutex& mu;
+        int& count;
+        std::condition_variable& cv;
+        ~SlotGuard() {
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                --count;
+            }
+            // Notify outside the lock to avoid spurious wake-and-reblock.
+            cv.notify_one();
+        }
+    } slotGuard{poolMutex_, activeCount_, activeCv_};
+
+    bool stored = false;
+    try {
         std::lock_guard<std::mutex> lock(poolMutex_);
         auto& idle = pool_[modelPath];
         if (static_cast<int>(idle.size()) < kMaxIdlePerModel) {
             idle.push_back(synth);
-        } else {
-            LogI("Pool cap reached for model, destroying excess instance: " + modelPath);
-            PiperNative::Instance().Free(synth);
+            stored = true;
         }
-        --activeCount_;
+    } catch (...) {
+        // Never leak the handle we failed to store; the guard releases the slot
+        // and the caller (PoolGuard) logs and swallows the exception.
+        PiperNative::Instance().Free(synth);
+        throw;
     }
-    // Notify one waiter outside the lock to avoid spurious wake-and-reblock.
-    activeCv_.notify_one();
+
+    if (!stored) {
+        LogI("Pool cap reached for model, destroying excess instance: " + modelPath);
+        PiperNative::Instance().Free(synth);
+    }
 }
 
 int PiperModelPool::StartSynthesize(piper_synthesizer* synth, const char* text,

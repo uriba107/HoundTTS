@@ -23,6 +23,22 @@ Follow [`PONYTAIL.md`](PONYTAIL.md) — lazy senior dev mode. Read before writin
 - Runtime: Windows 10 1903+ / Windows 11 / Windows Server 2019/2022 only.
 - Build log: `build.log`; test/debug log: `HoundTTS.log` in DCS Saved Games folder.
 
+### Why the deps stage uses a .NET Framework base image
+
+`Dockerfile.windows:16` pins `dotnet/framework/runtime:4.8-windowsservercore-ltsc2022`. HoundTTS itself uses **no** .NET (pure native C++) — the image exists for one provisioning chain:
+
+SAPI → needs `sapi.h` / `sphelper.h` + `ole32` / `oleaut32` (`CMakeLists.txt:132-154`) → only from MSVC v143 + Windows 10 SDK 19041 → only from `vs_buildtools.exe` → a .NET Framework app ("4.7.2 or above is required to install").
+
+Microsoft's *Build Tools in a container* guidance warns that a bare `windowsservercore` base can break .NET Framework **silently** — Build Tools installs, then its managed code won't run, with no install error. Hence the Framework image. `SHELL ["cmd","/S","/C"]` (`:18`) is there for the same reason: 4.8+ images default `SHELL` to PowerShell, which breaks `RUN`/`ENTRYPOINT`.
+
+- Do **not** "modernize" to .NET 10 (`dotnet/runtime:*`): .NET Framework is frozen at 4.8 / 4.8.1, and .NET 10 cannot host the Framework-targeted VS installer.
+- Do **not** swap to `windows/servercore` to "drop .NET": it buys nothing and risks the silent failure above.
+- Newest in-line tag, if ever needed: `mcr.microsoft.com/dotnet/framework/runtime:4.8.1-windowsservercore-ltsc2022` (exists).
+
+### Windows 10 compatibility (this image does not affect it)
+
+The shipped DLLs must load on Windows 10 (`README.md`: 1903+), and the container base image has no bearing on that: `HoundTTS.dll` is `/MT` and imports no CRT at all. The floor is set by the SDK pin at `Dockerfile.windows:49` (`Microsoft.VisualStudio.Component.Windows10SDK.19041`) — it bounds the import libraries to Win10-era APIs, and `_WIN32_WINNT` / `NTDDI_VERSION` are unset so they default from that SDK to Windows 10. Never swap that component for a Windows 11 SDK without re-checking `dumpbin /imports` on the output.
+
 ## CI
 
 `.github/workflows/build-windows.yml` — GitHub Actions `windows-2022` runner:
@@ -50,7 +66,7 @@ Entrypoint for Lua: `luaopen_HoundTTS` (`dllmain.cpp:48`) — called when DCS `r
 
 ## Code conventions
 
-- C++17, static CRT (`/MT`), self-contained DLL with no VCRUNTIME dependency.
+- C++17, static CRT (`/MT`), self-contained DLL with no VCRUNTIME dependency. This holds for `HoundTTS.dll` only — the bundled `piper.dll` and `onnxruntime.dll` import `MSVCP140`/`VCRUNTIME140`, which DCS itself installs (`DCS World\distr\vc_redist.x64.exe`). Don't bundle the redist; don't treat those imports as a bug.
 - **No `ITTSProvider` interface.** Providers are static classes — each exposes `SynthesizeToQueue(...)` with a provider-specific signature. Dispatch is a `TtsProvider` enum (`src/provider.h`) + if/else chain in `tts_pipeline.cpp:175-376`.
 - SapiTTS is **synchronous** — returns `std::vector<int16_t>` (inline, no thread). All other providers are **asynchronous** — accept `PCMQueue&` and run in a detached thread.
 - Backends implement `ITTSBackend` interface (`src/backend.h`).
@@ -85,8 +101,27 @@ Entrypoint for Lua: `luaopen_HoundTTS` (`dllmain.cpp:48`) — called when DCS `r
 
 ## Testing
 
-- **No test framework** — only manual/integration testing through DCS.
-- Test by building, loading DLL into DCS Saved Games, and running `HoundTTS.TestTone()` from a mission trigger.
+- **Host-side unit tests** — `tests/`, built only with `-DHOUNDTTS_BUILD_TESTS=ON`
+  (the Docker build and CI turn it on and run `ctest`, so a failing check fails
+  the build). Covers the pure logic a DCS flight cannot localise: INI parsing,
+  provider aliases, PCM request-key/cache eviction, queue padding contracts, SRS
+  packet + handshake JSON layout, AWS SigV4, Edge DRM tokens, Opus framing, tone
+  and noise generators. No framework, no fixtures, no network, no DCS.
+- **Integration** — load the built DLL into DCS Saved Games and run
+  `HoundTTS.TestTone()` from a mission trigger, plus a mission-level test pass
+  for provider/translation/TTS paths that need real credentials or SRS.
+- The unit tests deliberately do **not** cover provider HTTP/WebSocket clients,
+  SAPI/COM, or `tts_pipeline.cpp` dispatch — those need a live SRS server, API
+  keys, or a DCS session.
+
+Run them locally (Windows containers mode Docker Desktop) — `ctest` runs inside
+the build stage, so the normal build already does it and `build.log` shows the
+result. For a tests-only build:
+
+```powershell
+docker build -f Dockerfile.windows --target build --isolation=hyperv -t houndtts-tests .
+docker run --rm --isolation=hyperv houndtts-tests cmd /S /C "cd C:\build && ctest --output-on-failure"
+```
 
 ## Deployment
 

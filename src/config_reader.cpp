@@ -136,10 +136,26 @@ void ConfigReader::ParseIni(const std::string& content) {
         std::string key = Trim(line.substr(0, eq));
         std::string val = Trim(line.substr(eq + 1));
 
-        // Strip inline comments
-        size_t semi = val.find(';');
-        if (semi != std::string::npos)
-            val = Trim(val.substr(0, semi));
+        // Strip inline comments, but never inside a quoted value: a ';' or '#'
+        // in a quoted URL/token/path is part of the value, not a comment.
+        // A '#' only starts a comment when it is the whole value's start
+        // (followed by whitespace or end-of-line) or preceded by whitespace.
+        size_t scanFrom = 0;
+        if (!val.empty() && (val.front() == '"' || val.front() == '\'')) {
+            size_t close = val.find(val.front(), 1);
+            if (close != std::string::npos) scanFrom = close + 1;
+        }
+        for (size_t i = scanFrom; i < val.size(); ++i) {
+            char c = val[i];
+            const bool hashComment =
+                (c == '#') &&
+                ((i > 0 && (val[i - 1] == ' ' || val[i - 1] == '\t')) ||
+                 (i == 0 && (val.size() == 1 || val[1] == ' ' || val[1] == '\t')));
+            if (c == ';' || hashComment) {
+                val = Trim(val.substr(0, i));
+                break;
+            }
+        }
 
         // Strip surrounding quotes (single or double) — paths with spaces don't need them
         if (val.size() >= 2 &&

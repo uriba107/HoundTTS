@@ -47,7 +47,11 @@ Native C++17 DLL (`HoundTTS.dll`) that exposes TTS and translation functions to 
 
 ## Verification
 
-No test framework. Build with CMake + MSVC on Windows. Verify via `HoundTTS.TestTone()` in DCS mission script.
+- Host-side unit tests live in `tests/` (no framework): `ctest` inside the Docker
+  build stage runs them; a failing check fails the build. Add a case there for
+  any new pure logic (parsing, keying, byte layout, generator maths).
+- Anything that needs COM/SAPI, HTTP/WebSocket, SRS, or the Lua state is still
+  verified by building and running `HoundTTS.TestTone()` in DCS.
 
 ## Child DOX Index
 

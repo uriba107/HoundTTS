@@ -19,6 +19,18 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
     static const int kChunkFrames = kSampleRate;   // 1 second per chunk
     static const float k2Pi = 2.0f * 3.14159265f;
 
+    if (!queue) {
+        Logger::Instance().Error("HoundTTS/Tone", "Null PCM queue; aborting tone generation");
+        return;
+    }
+
+    // Completion is signalled on every exit path — including an exception from
+    // Push()/allocation — otherwise a consumer blocked in PCMQueue::Pop() hangs.
+    struct MarkDoneGuard {
+        PCMQueue* q;
+        ~MarkDoneGuard() { if (q) q->MarkDone(); }
+    } doneGuard{queue.get()};
+
     // Validate duration: NaN or Inf → safe fallback
     if (!std::isfinite(durationS)) {
         Logger::Instance().Error("HoundTTS/Tone",
@@ -66,8 +78,7 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
-
-    queue->MarkDone();
+    // MarkDone is delivered by doneGuard on scope exit.
 }
 
 } // namespace HoundTTS

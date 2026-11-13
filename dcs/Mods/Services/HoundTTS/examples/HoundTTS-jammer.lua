@@ -10,6 +10,11 @@ do
     HoundNoise = {
         next = 1
     }
+    -- Seconds the follow-up voice call needs after each noise burst. The DLL
+    -- transmissions run asynchronously, so the voice call is queued instead of
+    -- being started immediately on top of the noise.
+    local VOICE_SLOT = 6
+
     function HoundNoise.run(self)
         local tests = {
             {name = "white/pink noise", profile = "pink", delay_next_by = 10},
@@ -24,7 +29,8 @@ do
         local currentTest = tests[self.next]
         UserSpaceLogging(string.format("Transmitting Noise (%s) (%d/%d)",currentTest.name,self.next,#tests),currentTest.delay_next_by)
         self.noiseMaker(currentTest.profile, 10)
-        local next_test_time = timer.getTime() + currentTest.delay_next_by
+        -- Next test starts after the noise burst *and* the follow-up voice call.
+        local next_test_time = timer.getTime() + currentTest.delay_next_by + VOICE_SLOT
         UserSpaceLogging(string.format("Finished %s transmission.",currentTest.name),2) 
         self.next = self.next + 1
         return next_test_time + 2
@@ -43,10 +49,15 @@ do
                 duration = duration
             }
         )
-        HoundTTS.Transmit(
-            string.format("Radio call with %s transmission. Can you hear me?", profile),
-            transmitter_params
-        )
+        -- Serialize: queue the voice call for after the noise has finished
+        -- (plus the DLL's 200 ms tail padding) so the two never overlap.
+        timer.scheduleFunction(function()
+            HoundTTS.Transmit(
+                string.format("Radio call with %s transmission. Can you hear me?", profile),
+                transmitter_params
+            )
+            return nil
+        end, nil, timer.getTime() + duration + 1)
     end
 
     timer.scheduleFunction(HoundNoise.run, HoundNoise, timer.getTime() + 2)

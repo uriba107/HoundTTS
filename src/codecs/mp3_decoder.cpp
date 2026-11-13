@@ -13,6 +13,8 @@ static void ResampleAppend(const int16_t* src, size_t srcCount,
         return;
     }
 
+    if (srcRate <= 0) return;  // malformed frame: no usable rate, drop it
+
     double ratio = static_cast<double>(srcRate) / 16000.0;
     size_t dstCount = static_cast<size_t>(srcCount / ratio);
     if (dstCount == 0) return;

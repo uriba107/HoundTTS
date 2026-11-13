@@ -21,6 +21,18 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
     static const int   kChunkFrames = kSampleRate;   // 1 second per chunk
     static const float k2Pi         = 2.0f * 3.14159265f;
 
+    if (!queue) {
+        Logger::Instance().Error("HoundTTS/Noise", "Null PCM queue; aborting noise generation");
+        return;
+    }
+
+    // Completion is signalled on every exit path — including an exception from
+    // Push()/allocation — otherwise a consumer blocked in PCMQueue::Pop() hangs.
+    struct MarkDoneGuard {
+        PCMQueue* q;
+        ~MarkDoneGuard() { if (q) q->MarkDone(); }
+    } doneGuard{queue.get()};
+
     // Validate duration: NaN or Inf would cause undefined behaviour in the
     // float→int conversion below, so coerce to a safe fallback.
     if (!std::isfinite(duration)) {
@@ -57,6 +69,9 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
         o.life    = o.maxLife;
     }
 
+    // std::min/std::max propagate NaN, and NaN -> int16_t is UB when the chunk
+    // is built, so clamp a non-finite volume exactly like tone.cpp does.
+    if (!std::isfinite(volume)) volume = 1.0f;
     float vol = std::max(0.0f, std::min(1.0f, volume));
 
     // Noise floor dominates — oscillators add spectral density.
@@ -255,8 +270,7 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
             }
         }
     }
-
-    queue->MarkDone();
+    // MarkDone is delivered by doneGuard on scope exit.
 }
 
 } // namespace HoundTTS
