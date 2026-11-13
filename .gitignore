@@ -124,3 +124,6 @@ release/
 !lib/opus.lib
 
 .understand-anything/
+.windsurf/
+
+.brain/
