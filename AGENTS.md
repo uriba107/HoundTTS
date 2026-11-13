@@ -101,8 +101,27 @@ Entrypoint for Lua: `luaopen_HoundTTS` (`dllmain.cpp:48`) — called when DCS `r
 
 ## Testing
 
-- **No test framework** — only manual/integration testing through DCS.
-- Test by building, loading DLL into DCS Saved Games, and running `HoundTTS.TestTone()` from a mission trigger.
+- **Host-side unit tests** — `tests/`, built only with `-DHOUNDTTS_BUILD_TESTS=ON`
+  (the Docker build and CI turn it on and run `ctest`, so a failing check fails
+  the build). Covers the pure logic a DCS flight cannot localise: INI parsing,
+  provider aliases, PCM request-key/cache eviction, queue padding contracts, SRS
+  packet + handshake JSON layout, AWS SigV4, Edge DRM tokens, Opus framing, tone
+  and noise generators. No framework, no fixtures, no network, no DCS.
+- **Integration** — load the built DLL into DCS Saved Games and run
+  `HoundTTS.TestTone()` from a mission trigger, plus a mission-level test pass
+  for provider/translation/TTS paths that need real credentials or SRS.
+- The unit tests deliberately do **not** cover provider HTTP/WebSocket clients,
+  SAPI/COM, or `tts_pipeline.cpp` dispatch — those need a live SRS server, API
+  keys, or a DCS session.
+
+Run them locally (Windows containers mode Docker Desktop) — `ctest` runs inside
+the build stage, so the normal build already does it and `build.log` shows the
+result. For a tests-only build:
+
+```powershell
+docker build -f Dockerfile.windows --target build --isolation=hyperv -t houndtts-tests .
+docker run --rm --isolation=hyperv houndtts-tests cmd /S /C "cd C:\build && ctest --output-on-failure"
+```
 
 ## Deployment
 

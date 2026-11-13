@@ -223,6 +223,7 @@ WORKDIR C:\\src
 COPY CMakeLists.txt C:/src
 COPY make_lua_lib.ps1 C:/src
 COPY src/ C:/src/src
+COPY tests/ C:/src/tests
 COPY include/ C:/src/include
 COPY lib/ C:/src/lib
 
@@ -239,11 +240,17 @@ RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake \
       -DVCPKG_TARGET_TRIPLET=x64-windows-static \
+      -DHOUNDTTS_BUILD_TESTS=ON \
       -DHOUNDTTS_VERSION_OVERRIDE=%HOUNDTTS_VERSION%
 
 # Compile (parallel build uses all available cores)
 RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
     cmake --build C:\build --parallel
+
+# Host-side unit tests. They need no DCS, SRS server or API keys, and a failing
+# check fails the image build — so CI cannot ship a regression that "compiles".
+RUN C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat && \
+    cd C:\build && ctest --output-on-failure
 
 # ============================================================
 # Stage 4: base-output — package just the base package (DLL + Lua + config)

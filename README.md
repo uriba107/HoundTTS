@@ -1096,6 +1096,29 @@ This is typically caused by Windows path length limitations. To resolve this, en
 .\build-docker.ps1
 ```
 
+### Unit tests
+
+`tests/` contains a framework-free host-side test runner (`houndtts_tests`) for
+the logic that cannot be checked from a DCS mission: INI parsing and clamping,
+provider aliases, PCM cache keying + LRU/TTL eviction, queue padding contracts,
+SRS UDP packet and handshake JSON layout, AWS SigV4 signing, Edge DRM tokens,
+Opus framing, and the tone/noise generators.
+
+It is compiled only when asked for (`-DHOUNDTTS_BUILD_TESTS=ON`); the Docker build
+stage turns that on and runs `ctest`, so a failing check fails the build — and
+therefore CI. `build.log` contains the `ctest` output. To build and run just the
+tests (skips the piper/supertonic stages):
+
+```powershell
+docker build -f Dockerfile.windows --target build --isolation=hyperv -t houndtts-tests .
+docker run --rm --isolation=hyperv houndtts-tests cmd /S /C "cd C:\build && ctest --output-on-failure"
+```
+
+What it does **not** cover: provider HTTP/WebSocket clients (need API keys or a
+local server), SAPI/COM, the Lua bindings, and `tts_pipeline.cpp` dispatch — for
+those, use the DCS test mission with `HoundTTS.TestTone()` and the provider
+sections you actually use.
+
 ## License
 
 HoundTTS itself is released under the **MIT License** — see [LICENSE](LICENSE).
