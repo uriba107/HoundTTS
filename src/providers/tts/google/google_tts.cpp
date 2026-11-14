@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 
 namespace HoundTTS {
 
@@ -85,11 +86,19 @@ bool GoogleTTS::SynthesizeToQueue(
     std::string locale     = culture.empty() ? "en-US" : culture;
     std::string ssmlGender = MapGender(gender);
 
+    if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.25) speed = 0.25;
     if (speed > 4.0)  speed = 4.0;
 
-    bool isSsml = (text.size() >= 6 && text.compare(0, 6, "<speak") == 0 &&
-                   (text.size() == 6 || text[6] == '>' || std::isspace((unsigned char)text[6])));
+    // Match AWS/Azure: skip leading whitespace and require a tag boundary.
+    size_t ssmlOff = 0;
+    while (ssmlOff < text.size() && std::isspace(static_cast<unsigned char>(text[ssmlOff])))
+        ++ssmlOff;
+    bool isSsml = (text.size() - ssmlOff >= 6 &&
+                   text.compare(ssmlOff, 6, "<speak") == 0 &&
+                   (text.size() - ssmlOff == 6 ||
+                    text[ssmlOff + 6] == '>' ||
+                    std::isspace(static_cast<unsigned char>(text[ssmlOff + 6]))));
 
     std::ostringstream body;
     body << "{"

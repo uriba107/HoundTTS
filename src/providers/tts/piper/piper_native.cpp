@@ -16,6 +16,14 @@ bool PiperNative::Load(const std::string& dllDir) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (loaded_) return available_;
 
+    // Clear loaded_ if this attempt exits via an exception so a later call can
+    // retry; keep it set on permanent outcomes (success / permanent failure).
+    struct LoadGuard {
+        bool& loaded;
+        bool keep = false;
+        ~LoadGuard() { if (!keep) loaded = false; }
+    } loadGuard{loaded_};
+
     loaded_ = true;
 
     std::string dllPath = dllDir;
@@ -46,8 +54,7 @@ bool PiperNative::Load(const std::string& dllDir) {
 
     if (!hDll_) {
         LogE("LoadLibrary failed for piper.dll (GLE=" + std::to_string(loadErr) + ") — piper.exe subprocess fallback active");
-        loaded_ = false;   // allow a later Load() with a corrected path
-        return false;
+        return false;   // LoadGuard clears loaded_, allowing a retry later
     }
 
     fn_create_   = (PFN_piper_create)                    GetProcAddress(hDll_, "piper_create");
@@ -65,13 +72,16 @@ bool PiperNative::Load(const std::string& dllDir) {
         fn_defaults_ = nullptr;
         fn_start_    = nullptr;
         fn_next_     = nullptr;
-        FreeLibrary(hDll_);
-        hDll_ = nullptr;
-        loaded_ = false;   // allow a later Load() with a corrected path
+        // Keep the module loaded. FreeLibrary here would invalidate a function
+        // pointer a concurrent caller may already have snapshotted, so the
+        // failure is permanent (a retry cannot fix missing exports anyway).
+        available_ = false;
+        loadGuard.keep = true;
         return false;
     }
 
     available_ = true;
+    loadGuard.keep = true;
 
     LogI("piper.dll loaded successfully");
     return true;

@@ -12,6 +12,7 @@
 #include <atomic>
 #include <memory>
 #include <stdexcept>
+#include <exception>
 
 namespace HoundTTS {
 
@@ -110,27 +111,30 @@ public:
     }
 
     void MarkDone() override {
+        std::exception_ptr ep;
         {
             std::lock_guard<std::mutex> lock(opMutex_);
             if (!doneSent_.exchange(true)) {
-                // Forwarding allocates (tail silence) and may throw. Our own
-                // m_done must still be set first, or a consumer blocks in
-                // Pop() forever; the caller re-logs the rethrown exception.
                 try {
                     if (leadInSent_.load())
                         downstream_->Push(std::vector<int16_t>(padSamples_, 0));
                     downstream_->MarkDone();
                 } catch (...) {
-                    // Completion must still reach the consumer even if the
-                    // forward failed: best-effort downstream, then ourselves,
-                    // then let the caller log the original exception.
+                    // Forwarding failed: reset the latch so a later retry can
+                    // re-forward, and best-effort one immediate retry.
+                    ep = std::current_exception();
+                    doneSent_.store(false);
                     try { downstream_->MarkDone(); } catch (...) {}
-                    PCMQueue::MarkDone();
-                    throw;
                 }
             }
+            // Always complete this queue locally, even if the forward failed.
+            try {
+                PCMQueue::MarkDone();
+            } catch (...) {
+                if (!ep) ep = std::current_exception();
+            }
         }
-        PCMQueue::MarkDone();
+        if (ep) std::rethrow_exception(ep);
     }
 
 private:

@@ -49,10 +49,12 @@ public:
         const int n = ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
                                            static_cast<int>(w.size()),
                                            nullptr, 0, nullptr, nullptr);
-        if (n <= 0) return std::string();
+        if (n <= 0)
+            throw std::runtime_error("TempDir: WideCharToMultiByte(size) failed");
         std::string out(static_cast<size_t>(n), '\0');
-        ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
-                              &out[0], n, nullptr, nullptr);
+        if (::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
+                                  &out[0], n, nullptr, nullptr) != n)
+            throw std::runtime_error("TempDir: WideCharToMultiByte(convert) failed");
         return out;
     }
 

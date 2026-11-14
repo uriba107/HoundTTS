@@ -85,7 +85,9 @@ void RunGeneratorTests(testing::Context& ctx) {
 
     CASE(ctx, "GenerateTone clamps volume above 1.0") {
         CHECK_EQ_INT(ctx, RunTone(0.02, 440.0f, 5.0f).size(), 320);
-        CHECK(ctx, PeakAbs(RunTone(0.02, 440.0f, 5.0f)) <= 32767);
+        // Identical to volume 1.0 proves the clamp, not just an int16 range.
+        CHECK_EQ_INT(ctx, PeakAbs(RunTone(0.02, 440.0f, 5.0f)),
+                          PeakAbs(RunTone(0.02, 440.0f, 1.0f)));
     }
 
     CASE(ctx, "GenerateTone survives NaN/inf frequency and volume") {
@@ -143,7 +145,9 @@ void RunGeneratorTests(testing::Context& ctx) {
 
     CASE(ctx, "GenerateNoise volume 0 is silent and volume is clamped") {
         CHECK(ctx, AllZero(RunNoise("jam", 1, 0.0f, 0.05)));
-        CHECK(ctx, PeakAbs(RunNoise("jam", 1, 10.0f, 0.05)) <= 32767);
+        // Same seed as volume 1.0: equal peaks prove the clamp.
+        CHECK_EQ_INT(ctx, PeakAbs(RunNoise("jam", 1, 10.0f, 0.05)),
+                          PeakAbs(RunNoise("jam", 1, 1.0f, 0.05)));
     }
 
     CASE(ctx, "GenerateNoise stops immediately on a dead session") {

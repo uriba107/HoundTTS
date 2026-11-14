@@ -72,6 +72,12 @@ void RunSrsTypesTests(testing::Context& ctx) {
         CHECK_EQ_INT(ctx, empty.size(), 1);
         CHECK_NEAR(ctx, empty[0].freqHz, 251000000.0, 1e-6);
         CHECK_EQ_INT(ctx, empty[0].modulation, 0);
+
+        // The fallback entry must still honour the caller's encryption flags.
+        std::vector<FreqMod> enc = ParseFreqMods("", "", true, 42);
+        CHECK_EQ_INT(ctx, enc.size(), 1);
+        CHECK(ctx, enc[0].encrypt);
+        CHECK_EQ_INT(ctx, enc[0].encKey, 42);
     }
 
     CASE(ctx, "ParseFreqMods applies encrypt/encKey to every entry") {

@@ -32,7 +32,15 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
         // during stack unwinding would call std::terminate.
         ~MarkDoneGuard() noexcept {
             if (!q) return;
-            try { q->MarkDone(); } catch (...) {}
+            try {
+                q->MarkDone();
+            } catch (const std::exception& e) {
+                try { Logger::Instance().Error("HoundTTS/Tone",
+                        std::string("MarkDone failed: ") + e.what()); } catch (...) {}
+            } catch (...) {
+                try { Logger::Instance().Error("HoundTTS/Tone",
+                        "MarkDone failed: unknown exception"); } catch (...) {}
+            }
         }
     } doneGuard{queue.get()};
 
@@ -69,12 +77,18 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
 
         std::vector<int16_t> chunk(chunkSize);
         for (int i = 0; i < chunkSize; ++i) {
+            // Match noise: trim the in-flight chunk promptly on kill instead of
+            // queuing up to a full second of tone for transmission.
+            if ((i % 1000 == 0) && !isAlive()) {
+                chunk.resize(static_cast<size_t>(i));
+                break;
+            }
             float t   = static_cast<float>(samplesGenerated + i) / kSampleRate;
             float val = std::sin(k2Pi * freqHz * t);
             chunk[i] = static_cast<int16_t>(val * 32767.0f * vol);
         }
 
-        samplesGenerated += chunkSize;
+        samplesGenerated += static_cast<int>(chunk.size());
         queue->Push(std::move(chunk));
 
         // Pace at ~real-time to prevent unbounded audio buffering downstream.

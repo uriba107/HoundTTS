@@ -34,7 +34,15 @@ void GenerateNoise(std::shared_ptr<PCMQueue> queue,
         // during stack unwinding would call std::terminate.
         ~MarkDoneGuard() noexcept {
             if (!q) return;
-            try { q->MarkDone(); } catch (...) {}
+            try {
+                q->MarkDone();
+            } catch (const std::exception& e) {
+                try { Logger::Instance().Error("HoundTTS/Noise",
+                        std::string("MarkDone failed: ") + e.what()); } catch (...) {}
+            } catch (...) {
+                try { Logger::Instance().Error("HoundTTS/Noise",
+                        "MarkDone failed: unknown exception"); } catch (...) {}
+            }
         }
     } doneGuard{queue.get()};
 

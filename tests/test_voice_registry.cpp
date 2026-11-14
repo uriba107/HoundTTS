@@ -52,6 +52,9 @@ void RunVoiceRegistryTests(testing::Context& ctx) {
         // path the pipeline relies on to fall back instead of opening a model
         // file that does not exist.
         PiperVoiceRegistry& registry = PiperVoiceRegistry::Instance();
+        // Pin that the registry really is initialized: without this the two
+        // negative checks below would also pass on an uninitialized registry.
+        CHECK(ctx, registry.IsDefaultVoiceAvailable());
         CHECK(ctx, !registry.IsVoiceAvailable("anything"));
         CHECK(ctx, !registry.IsVoiceAvailable(""));
     }

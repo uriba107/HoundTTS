@@ -312,6 +312,12 @@ bool SupertonicTTS::SynthesizeToQueue(
     // Acquire concurrency slot (blocks if at max)
     pool.AcquireSlot(maxConcurrent);
 
+    // Completion must survive a throw from Resample/Push/allocation below.
+    struct DoneGuard {
+        PCMQueue& q;
+        ~DoneGuard() noexcept { try { q.MarkDone(); } catch (...) {} }
+    } doneGuard{queue};
+
     // Release the slot on every path, including exceptions thrown below — a
     // leaked slot permanently reduces maxConcurrent and eventually wedges all
     // synthesis. Release() is called explicitly once the audio is converted so
@@ -327,8 +333,13 @@ bool SupertonicTTS::SynthesizeToQueue(
         }
         void Release() {
             if (released) return;
-            pool.ReleaseSlot();   // only claim the slot is back once it is
-            released = true;
+            try {
+                pool.ReleaseSlot();   // only claim the slot is back once it is
+                released = true;
+            } catch (...) {
+                // Keep released=false so the destructor makes one more attempt;
+                // a normal synthesis path must not fail on slot bookkeeping.
+            }
         }
     } slotGuard{pool};
 

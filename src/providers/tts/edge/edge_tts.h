@@ -13,7 +13,7 @@ namespace HoundTTS {
 // Uses a reverse-engineered WebSocket API — no API key required.
 // Requests 24kHz MP3, decodes to 16kHz 16-bit mono PCM → pushes to PCMQueue.
 // Calls queue.MarkDone() on every normal return path (success or failure);
-// TTSPipeline's dispatch catch-all delivers MarkDone if this throws.
+// the dispatching caller delivers MarkDone if this function throws.
 //
 // WARNING: This uses an unofficial Microsoft endpoint. It may stop working
 // if Microsoft changes the API, revokes the trusted client token, or

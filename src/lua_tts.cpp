@@ -63,8 +63,14 @@ static void ExpandFreqs(const std::string& freqsIn,
     {
         std::stringstream sf(freqsIn), sm(modsIn);
         std::string tok;
-        while (std::getline(sf, tok, ',') && centers.size() < kMaxCenters)
-            try { centers.push_back(std::stod(tok)); } catch (...) {}
+        while (std::getline(sf, tok, ',') && centers.size() < kMaxCenters) {
+            // stod accepts "nan"/"inf"; reject them at parse time rather than
+            // storing values tryAdd would discard later.
+            try {
+                double v = std::stod(tok);
+                if (std::isfinite(v)) centers.push_back(v);
+            } catch (...) {}
+        }
         while (std::getline(sm, tok, ',') && mods.size() < kMaxCenters)
             try { mods.push_back(tok); } catch (...) {}
     }
@@ -230,7 +236,7 @@ int l_textToSpeech(lua_State* L) {
     txParams.session         = session;
 
     // Shared PCM queue: pipeline produces, backend consumes
-    auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
+    std::shared_ptr<HoundTTS::PCMQueue> pcmQueue;
 
     // Detach a single thread: pipeline runs (may detach sub-threads), then backend transmits.
     // Nothing may escape a detached thread (std::terminate kills DCS), and the
@@ -240,19 +246,22 @@ int l_textToSpeech(lua_State* L) {
     // escaping the extern "C" entry point.
     std::shared_ptr<HoundTTS::ITTSBackend> backendShared;
     try {
+        pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
         backendShared = std::shared_ptr<HoundTTS::ITTSBackend>(
             std::unique_ptr<HoundTTS::ITTSBackend>(MakeBackend(transmitter)));
         HoundTTS::SpawnDetached([req, pcmQueue, txParams, session, backendShared]() {
             try {
                 HoundTTS::TTSPipeline::Produce(req, pcmQueue);
             } catch (const std::exception& e) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_textToSpeech", std::string("pipeline failed: ") + e.what());
-                pcmQueue->MarkDone();
+                // Nothing may escape a detached thread: guard both the logging
+                // and MarkDone (it allocates and locks).
+                try { HoundTTS::Logger::Instance().Error(
+                    "l_textToSpeech", std::string("pipeline failed: ") + e.what()); } catch (...) {}
+                try { pcmQueue->MarkDone(); } catch (...) {}
             } catch (...) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_textToSpeech", "pipeline failed: unknown exception");
-                pcmQueue->MarkDone();
+                try { HoundTTS::Logger::Instance().Error(
+                    "l_textToSpeech", "pipeline failed: unknown exception"); } catch (...) {}
+                try { pcmQueue->MarkDone(); } catch (...) {}
             }
             try {
                 backendShared->Transmit(pcmQueue, txParams);
@@ -464,7 +473,7 @@ int l_startNoise(lua_State* L) {
     txParams.session         = session;
 
     // Shared PCM queue: noise generator produces, backend consumes
-    auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
+    std::shared_ptr<HoundTTS::PCMQueue> pcmQueue;
 
     // Detach thread: noise generator runs concurrently with backend transmitting.
     // Exceptions must not escape either detached thread (std::terminate); the
@@ -473,6 +482,7 @@ int l_startNoise(lua_State* L) {
     // reported to Lua instead of escaping the extern "C" entry point.
     std::shared_ptr<HoundTTS::ITTSBackend> backendShared;
     try {
+        pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
         backendShared = std::shared_ptr<HoundTTS::ITTSBackend>(
             std::unique_ptr<HoundTTS::ITTSBackend>(MakeBackend(transmitter)));
         HoundTTS::SpawnDetached([pcmQueue, txParams, noiseType, seed, volume, duration, session, backendShared]() {
@@ -481,13 +491,13 @@ int l_startNoise(lua_State* L) {
                     try {
                         HoundTTS::TTSPipeline::ProduceNoise(pcmQueue, session, noiseType, seed, volume, duration);
                     } catch (const std::exception& e) {
-                        HoundTTS::Logger::Instance().Error(
-                            "l_startNoise", std::string("producer failed: ") + e.what());
-                        pcmQueue->MarkDone();
+                        try { HoundTTS::Logger::Instance().Error(
+                            "l_startNoise", std::string("producer failed: ") + e.what()); } catch (...) {}
+                        try { pcmQueue->MarkDone(); } catch (...) {}
                     } catch (...) {
-                        HoundTTS::Logger::Instance().Error(
-                            "l_startNoise", "producer failed: unknown exception");
-                        pcmQueue->MarkDone();
+                        try { HoundTTS::Logger::Instance().Error(
+                            "l_startNoise", "producer failed: unknown exception"); } catch (...) {}
+                        try { pcmQueue->MarkDone(); } catch (...) {}
                     }
                 });
                 backendShared->Transmit(pcmQueue, txParams);
@@ -603,7 +613,7 @@ int l_startTone(lua_State* L) {
     txParams.alt             = alt;
     txParams.session         = session;
 
-    auto pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
+    std::shared_ptr<HoundTTS::PCMQueue> pcmQueue;
 
     // Detach thread: tone generator runs concurrently with backend transmitting.
     // Exceptions must not escape either detached thread (std::terminate); the
@@ -612,6 +622,7 @@ int l_startTone(lua_State* L) {
     // reported to Lua instead of escaping the extern "C" entry point.
     std::shared_ptr<HoundTTS::ITTSBackend> backendShared;
     try {
+        pcmQueue = std::make_shared<HoundTTS::PCMQueue>();
         backendShared = std::shared_ptr<HoundTTS::ITTSBackend>(
             std::unique_ptr<HoundTTS::ITTSBackend>(MakeBackend(transmitter)));
         HoundTTS::SpawnDetached([pcmQueue, txParams, duration, freqHz, volume, session, backendShared]() {
@@ -620,13 +631,13 @@ int l_startTone(lua_State* L) {
                     try {
                         HoundTTS::TTSPipeline::ProduceTone(pcmQueue, session, duration, freqHz, volume);
                     } catch (const std::exception& e) {
-                        HoundTTS::Logger::Instance().Error(
-                            "l_startTone", std::string("producer failed: ") + e.what());
-                        pcmQueue->MarkDone();
+                        try { HoundTTS::Logger::Instance().Error(
+                            "l_startTone", std::string("producer failed: ") + e.what()); } catch (...) {}
+                        try { pcmQueue->MarkDone(); } catch (...) {}
                     } catch (...) {
-                        HoundTTS::Logger::Instance().Error(
-                            "l_startTone", "producer failed: unknown exception");
-                        pcmQueue->MarkDone();
+                        try { HoundTTS::Logger::Instance().Error(
+                            "l_startTone", "producer failed: unknown exception"); } catch (...) {}
+                        try { pcmQueue->MarkDone(); } catch (...) {}
                     }
                 });
                 backendShared->Transmit(pcmQueue, txParams);
@@ -704,10 +715,17 @@ int l_updateSession(lua_State* L) {
         return 1;
     }
 
-    // Position update — SRS-specific; only fires if backend attached SRSPositionData
+    // Position update — SRS-specific; only fires if backend attached SRSPositionData.
+    // A throwing lock/cast must not escape this extern "C" entry point.
     std::shared_ptr<HoundTTS::SRSPositionData> posData;
-    { std::lock_guard<std::mutex> lk(session->backendMutex);
-      posData = std::static_pointer_cast<HoundTTS::SRSPositionData>(session->backendData); }
+    try {
+        std::lock_guard<std::mutex> lk(session->backendMutex);
+        posData = std::static_pointer_cast<HoundTTS::SRSPositionData>(session->backendData);
+    } catch (const std::exception& e) {
+        try { log.Error("updateSession", std::string("backend data lock failed: ") + e.what()); } catch (...) {}
+    } catch (...) {
+        try { log.Error("updateSession", "backend data lock failed: unknown exception"); } catch (...) {}
+    }
     if (posData) {
         bool hasPos = false;
         double newLat = 0, newLon = 0, newAlt = 0;

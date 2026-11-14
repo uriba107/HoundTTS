@@ -40,7 +40,7 @@ static void AppendUtf8(std::string& out, unsigned int cp) {
 std::string JsonEscape(const std::string& s) {
     static const char* kHex = "0123456789abcdef";
     std::string out;
-    out.reserve(s.size() + 8);
+    out.reserve(s.size() * 2);
     for (unsigned char c : s) {
         switch (c) {
         case '"':  out += "\\\""; break;
@@ -143,6 +143,21 @@ std::string JsonDecodeString(const std::string& s, size_t pos, size_t* endPos) {
 
     if (endPos) *endPos = pos;
     return out;
+}
+
+bool HasControlChars(const std::string& s) {
+    for (unsigned char c : s)
+        if (c < 0x20 || c == 0x7F) return true;
+    return false;
+}
+
+bool IsSafeHostLabel(const std::string& s, size_t maxLen) {
+    if (s.empty() || s.size() > maxLen) return false;
+    for (unsigned char c : s) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))
+            return false;
+    }
+    return true;
 }
 
 bool IsAlphaLanguageCode(const std::string& code) {

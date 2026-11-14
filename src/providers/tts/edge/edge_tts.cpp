@@ -326,6 +326,11 @@ bool EdgeTTS::SynthesizeToQueue(
         LogI("Edge TTS: first attempt failed (possible 403), retrying with clock skew adjustment");
         EdgeDRM::AdjustClockSkew(5.0);
         success = TrySynthesize(text, voiceName, speed, volume, queue, got403);
+        if (!success) {
+            // Revert the nudge on failure: repeated unrecoverable failures must
+            // not accumulate skew into a permanent 403 feedback loop.
+            EdgeDRM::AdjustClockSkew(-5.0);
+        }
     }
 
     queue.MarkDone();

@@ -488,8 +488,10 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
                     // the counter to drain before `state` (a stack local) dies.
                     state->stopping.store(true, std::memory_order_seq_cst);
                     timeKillEvent(timerId);
-                    for (int i = 0; i < 2000 && state->callbacks.load() != 0; ++i)
+                    for (int i = 0; i < 20000 && state->callbacks.load() != 0; ++i)
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (state->callbacks.load() != 0)
+                        try { LogE("SRS timer callback did not drain before teardown"); } catch (...) {}
                 }
                 timeEndPeriod(1);
                 if (posData) {
@@ -582,18 +584,28 @@ std::vector<uint8_t> SRSClient::BuildVoicePacket(
     uint64_t packetId,
     const std::string& guid)
 {
-    uint16_t audioLen = static_cast<uint16_t>(opusFrame.size());
-    uint16_t freqLen  = static_cast<uint16_t>(freqs.size() * kFreqEntrySize);
-    uint16_t totalLen = static_cast<uint16_t>(
-        kHeaderSize + audioLen + freqLen + kFixedSize);
+    // Reject inputs that cannot fit in the protocol's uint16 length fields.
+    // Truncating them would wrap the lengths and produce an out-of-bounds write.
+    constexpr size_t kMaxFreqEntries = 0xFFFFu / kFreqEntrySize;
+    if (opusFrame.size() > 0xFFFFu || freqs.size() > kMaxFreqEntries)
+        return {};
 
-    std::vector<uint8_t> pkt(totalLen, 0);
+    const size_t audioLen = opusFrame.size();
+    const size_t freqLen  = freqs.size() * kFreqEntrySize;
+    const size_t totalSize = static_cast<size_t>(kHeaderSize) + audioLen + freqLen + kFixedSize;
+    if (totalSize > 0xFFFFu) return {};
+
+    const uint16_t totalLen16 = static_cast<uint16_t>(totalSize);
+    const uint16_t audioLen16 = static_cast<uint16_t>(audioLen);
+    const uint16_t freqLen16  = static_cast<uint16_t>(freqLen);
+
+    std::vector<uint8_t> pkt(totalLen16, 0);
     uint8_t* p = pkt.data();
 
     // Header
-    WriteLE16(p,     totalLen);  p += 2;
-    WriteLE16(p,     audioLen);  p += 2;
-    WriteLE16(p,     freqLen);   p += 2;
+    WriteLE16(p,     totalLen16);  p += 2;
+    WriteLE16(p,     audioLen16);  p += 2;
+    WriteLE16(p,     freqLen16);   p += 2;
 
     // Audio bytes (std::memcpy with a null source is UB even when size is 0)
     if (audioLen > 0 && !opusFrame.empty())

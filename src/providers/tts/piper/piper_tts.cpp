@@ -225,9 +225,9 @@ bool PiperTTS::SynthesizeViaNative(
             try {
                 pool.Release(modelPath, synth);
             } catch (const std::exception& e) {
-                LogE(std::string("PoolGuard::Release failed: ") + e.what());
+                try { LogE(std::string("PoolGuard::Release failed: ") + e.what()); } catch (...) {}
             } catch (...) {
-                LogE("PoolGuard::Release failed: unknown exception");
+                try { LogE("PoolGuard::Release failed: unknown exception"); } catch (...) {}
             }
         }
     } guard{pool, modelPath, synth};
@@ -342,10 +342,31 @@ bool PiperTTS::SynthesizeViaSubprocess(
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
 
+    // Completion must survive any throw below (Push/Resample/allocation).
+    struct DoneGuard {
+        PCMQueue& q;
+        ~DoneGuard() noexcept { try { q.MarkDone(); } catch (...) {} }
+    } doneGuard{queue};
+
+    PROCESS_INFORMATION pi{};
+    // Close whatever is still open on every exit path. Explicit closes below
+    // null the handle so this never double-closes.
+    struct HandleCloser {
+        HANDLE& stdinRd; HANDLE& stdinWr; HANDLE& stdoutRd; HANDLE& stdoutWr;
+        PROCESS_INFORMATION& pi;
+        ~HandleCloser() {
+            if (stdinRd)  CloseHandle(stdinRd);
+            if (stdinWr)  CloseHandle(stdinWr);
+            if (stdoutRd) CloseHandle(stdoutRd);
+            if (stdoutWr) CloseHandle(stdoutWr);
+            if (pi.hProcess) CloseHandle(pi.hProcess);
+            if (pi.hThread)  CloseHandle(pi.hThread);
+        }
+    } handleCloser{hStdinRd, hStdinWr, hStdoutRd, hStdoutWr, pi};
+
     if (!CreatePipe(&hStdinRd, &hStdinWr, &sa, 0)) { LogE("CreatePipe(stdin) failed"); queue.MarkDone(); return false; }
     if (!CreatePipe(&hStdoutRd, &hStdoutWr, &sa, 0)) {
         LogE("CreatePipe(stdout) failed");
-        CloseHandle(hStdinRd); CloseHandle(hStdinWr);
         queue.MarkDone(); return false;
     }
     SetHandleInformation(hStdinWr,  HANDLE_FLAG_INHERIT, 0);
@@ -358,25 +379,23 @@ bool PiperTTS::SynthesizeViaSubprocess(
     si.hStdOutput = hStdoutWr;
     si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
 
-    PROCESS_INFORMATION pi{};
     std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
     cmdBuf.push_back(L'\0');
     BOOL ok = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
                               CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
 
-    CloseHandle(hStdinRd);
-    CloseHandle(hStdoutWr);
+    CloseHandle(hStdinRd);  hStdinRd = nullptr;
+    CloseHandle(hStdoutWr); hStdoutWr = nullptr;
 
     if (!ok) {
         LogE("CreateProcessW failed GLE=" + std::to_string(GetLastError()));
-        CloseHandle(hStdinWr); CloseHandle(hStdoutRd);
         queue.MarkDone(); return false;
     }
     LogI("piper.exe launched PID=" + std::to_string(pi.dwProcessId));
 
     DWORD written = 0;
     WriteFile(hStdinWr, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
-    CloseHandle(hStdinWr);
+    CloseHandle(hStdinWr); hStdinWr = nullptr;
 
     static const int kChunkBytes = 4096;
     std::vector<uint8_t> rawBuf(kChunkBytes);
@@ -408,12 +427,11 @@ bool PiperTTS::SynthesizeViaSubprocess(
 
     LogI("total PCM bytes: " + std::to_string(totalPcmBytes));
     queue.MarkDone();
-    CloseHandle(hStdoutRd);
     DWORD exitCode = 0;
     WaitForSingleObject(pi.hProcess, 5000);
     GetExitCodeProcess(pi.hProcess, &exitCode);
     if (exitCode != 0) LogE("piper.exe exit code: " + std::to_string(exitCode));
-    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    // Remaining pipe/process handles are closed by handleCloser.
     return exitCode == 0;
 }
 

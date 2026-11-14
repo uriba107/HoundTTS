@@ -69,23 +69,41 @@ static void RunTranslateWorker(std::shared_ptr<TranslateResult> slot, Work work)
                 slot->error = std::move(error);
                 slot->done  = true;   // published last, under the same lock
             } catch (const std::exception& e) {
-                LogE(std::string("failed to publish translation result: ") + e.what());
+                try { LogE(std::string("failed to publish translation result: ") + e.what()); } catch (...) {}
+                // Best effort: still mark the slot complete so the caller does
+                // not poll forever for a result that can never arrive.
+                try {
+                    std::lock_guard<std::mutex> lk(slot->mtx);
+                    slot->text.clear();
+                    slot->error = "failed to publish translation result";
+                    slot->done  = true;
+                } catch (...) {}
             } catch (...) {
-                LogE("failed to publish translation result: unknown exception");
+                try { LogE("failed to publish translation result: unknown exception"); } catch (...) {}
+                try {
+                    std::lock_guard<std::mutex> lk(slot->mtx);
+                    slot->text.clear();
+                    slot->error = "failed to publish translation result";
+                    slot->done  = true;
+                } catch (...) {}
             }
         });
     } catch (const std::exception& e) {
-        std::string error = std::string("Translation thread creation failed: ") + e.what();
-        LogE(error);
-        std::lock_guard<std::mutex> lk(slot->mtx);
-        slot->error = std::move(error);
-        slot->done  = true;
+        try {
+            std::string error = std::string("Translation thread creation failed: ") + e.what();
+            LogE(error);
+            std::lock_guard<std::mutex> lk(slot->mtx);
+            slot->error = std::move(error);
+            slot->done  = true;
+        } catch (...) {}
     } catch (...) {
-        const char* error = "Translation thread creation failed: unknown exception";
-        LogE(error);
-        std::lock_guard<std::mutex> lk(slot->mtx);
-        slot->error = error;
-        slot->done  = true;
+        try {
+            const char* error = "Translation thread creation failed: unknown exception";
+            LogE(error);
+            std::lock_guard<std::mutex> lk(slot->mtx);
+            slot->error = error;
+            slot->done  = true;
+        } catch (...) {}
     }
 }
 

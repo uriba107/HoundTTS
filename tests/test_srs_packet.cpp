@@ -19,10 +19,12 @@ using namespace HoundTTS;
 namespace {
 
 uint16_t Rd16(const std::vector<uint8_t>& v, size_t o) {
+    if (o + 2 > v.size()) return 0;
     return static_cast<uint16_t>(v[o]) | (static_cast<uint16_t>(v[o + 1]) << 8);
 }
 
 uint32_t Rd32(const std::vector<uint8_t>& v, size_t o) {
+    if (o + 4 > v.size()) return 0;
     return static_cast<uint32_t>(v[o]) |
            (static_cast<uint32_t>(v[o + 1]) << 8) |
            (static_cast<uint32_t>(v[o + 2]) << 16) |
@@ -31,6 +33,7 @@ uint32_t Rd32(const std::vector<uint8_t>& v, size_t o) {
 
 uint64_t Rd64(const std::vector<uint8_t>& v, size_t o) {
     // Little-endian, matching WriteLE64 in BuildVoicePacket (and Rd16/Rd32).
+    if (o + 8 > v.size()) return 0;
     uint64_t out = 0;
     for (int i = 0; i < 8; ++i) {
         out |= static_cast<uint64_t>(v[o + static_cast<size_t>(i)]) << (8 * i);
@@ -40,6 +43,7 @@ uint64_t Rd64(const std::vector<uint8_t>& v, size_t o) {
 
 double RdDouble(const std::vector<uint8_t>& v, size_t o) {
     double d = 0.0;
+    if (o + sizeof(d) > v.size()) return d;
     std::memcpy(&d, v.data() + o, sizeof(d));
     return d;
 }

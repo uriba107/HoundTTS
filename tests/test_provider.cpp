@@ -58,6 +58,7 @@ void RunProviderTests(testing::Context& ctx) {
             TtsProvider::Sapi, TtsProvider::Piper, TtsProvider::Azure,
             TtsProvider::Google, TtsProvider::ElevenLabs, TtsProvider::AWS,
             TtsProvider::OpenAI, TtsProvider::Supertonic, TtsProvider::Edge,
+            TtsProvider::Unknown,
         };
         for (TtsProvider p : all) {
             CHECK(ctx, ParseTtsProvider(TtsProviderName(p)) == p);
@@ -73,6 +74,7 @@ void RunProviderTests(testing::Context& ctx) {
         CHECK(ctx, ParseTranslateProvider("libretranslate") == TranslateProvider::LibreTranslate);
         CHECK(ctx, ParseTranslateProvider("libre")         == TranslateProvider::LibreTranslate);
         CHECK(ctx, ParseTranslateProvider("aws")           == TranslateProvider::AWS);
+        CHECK(ctx, ParseTranslateProvider("polly")         == TranslateProvider::AWS);
         CHECK(ctx, ParseTranslateProvider("amazon")        == TranslateProvider::AWS);
         CHECK(ctx, ParseTranslateProvider("azure")         == TranslateProvider::Azure);
         CHECK(ctx, ParseTranslateProvider("deepl")         == TranslateProvider::Unknown);
@@ -86,5 +88,15 @@ void RunProviderTests(testing::Context& ctx) {
         CHECK_STR_EQ(ctx, TranslateProviderName(TranslateProvider::AWS), "aws");
         CHECK_STR_EQ(ctx, TranslateProviderName(TranslateProvider::Azure), "azure");
         CHECK_STR_EQ(ctx, TranslateProviderName(TranslateProvider::Unknown), "unknown");
+
+        const TranslateProvider all[] = {
+            TranslateProvider::None, TranslateProvider::OpenAI,
+            TranslateProvider::Google, TranslateProvider::LibreTranslate,
+            TranslateProvider::AWS, TranslateProvider::Azure,
+            TranslateProvider::Unknown,
+        };
+        for (TranslateProvider p : all) {
+            CHECK(ctx, ParseTranslateProvider(TranslateProviderName(p)) == p);
+        }
     }
 }

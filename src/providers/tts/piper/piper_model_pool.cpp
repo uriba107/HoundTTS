@@ -25,8 +25,13 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
     // Acquire() starves permanently.
     struct SlotGuard {
         PiperModelPool& pool;
+        bool reserved = false;
         bool disarmed = false;
-        ~SlotGuard() { if (!disarmed) pool.ReleaseActiveSlot(); }
+        // Only release a slot that was actually reserved: a throw from wait()
+        // or the map lookup before ++activeCount_ must not underflow the count.
+        ~SlotGuard() noexcept {
+            if (reserved && !disarmed) pool.ReleaseActiveSlot();
+        }
     } slotGuard{*this};
 
     // Bounded concurrency: block until an active slot is available, then
@@ -40,6 +45,7 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
         }
         activeCv_.wait(lock, [this]{ return activeCount_ < maxActive_; });
         ++activeCount_;
+        slotGuard.reserved = true;
 
         auto it = pool_.find(modelPath);
         if (it != pool_.end() && !it->second.empty()) {
@@ -76,13 +82,16 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
     return synth;
 }
 
-void PiperModelPool::ReleaseActiveSlot() {
-    {
-        std::lock_guard<std::mutex> lock(poolMutex_);
-        --activeCount_;
-    }
-    // Notify outside the lock to avoid spurious wake-and-reblock.
-    activeCv_.notify_one();
+void PiperModelPool::ReleaseActiveSlot() noexcept {
+    // Called from a noexcept destructor: a throwing lock must not terminate.
+    try {
+        {
+            std::lock_guard<std::mutex> lock(poolMutex_);
+            --activeCount_;
+        }
+        // Notify outside the lock to avoid spurious wake-and-reblock.
+        activeCv_.notify_one();
+    } catch (...) {}
 }
 
 void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* synth) {
@@ -96,7 +105,9 @@ void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* sy
         int& count;
         std::condition_variable& cv;
         bool released = false;
-        ~SlotGuard() { Release(); }
+        ~SlotGuard() noexcept {
+            try { Release(); } catch (...) {}
+        }
         void Release() {
             if (released) return;
             {

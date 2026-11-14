@@ -13,6 +13,7 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <chrono>
 #include <utility>
 #include <windows.h>
 
@@ -36,6 +37,10 @@ enum class LogLevel { LEVEL_ERROR = 0, LEVEL_INFO = 1, LEVEL_DEBUG = 2 };
 // the constructor succeeds but detach() throws, the temporary is still
 // joinable when its destructor runs and std::terminate follows. This keeps the
 // project's detached-thread convention while making that failure path safe.
+//
+// NOTE: the callable is moved into the thread and outlives this function, so
+// callers must capture by value (shared_ptr, copies). Capturing a local by
+// reference is a use-after-free.
 template <typename F>
 inline void SpawnDetached(F&& f) {
     std::thread t(std::forward<F>(f));
@@ -187,6 +192,14 @@ std::string JsonEscape(const std::string& s);
 // s.size() when the string is unterminated).
 std::string JsonDecodeString(const std::string& s, size_t pos,
                              size_t* endPos = nullptr);
+
+// True when `s` contains a C0 control character or DEL. Used to reject values
+// that are interpolated into HTTP headers (CR/LF injection).
+bool HasControlChars(const std::string& s);
+
+// True when `s` is a plausible DNS label: lowercase letters, digits and '-',
+// at most `maxLen` chars. Used for region/endpoint fragments from config.
+bool IsSafeHostLabel(const std::string& s, size_t maxLen = 32);
 
 // True when `code` is a plausible ISO 639-1/2 language code: 2-3 ASCII letters.
 // Used to reject arbitrary Lua strings before they reach a request body/URL.

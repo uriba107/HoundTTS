@@ -62,6 +62,10 @@ static std::string BuildSSML(const std::string& text,
 
     // Map speed multiplier to SSML prosody rate percentage
     // 1.0 = 0%, 2.0 = +100%, 0.5 = -50%
+    // NaN/Inf would bypass the range clamps and make the int cast UB.
+    if (!std::isfinite(speed)) speed = 1.0;
+    if (speed < 0.25) speed = 0.25;
+    if (speed > 4.0)  speed = 4.0;
     std::ostringstream rateStr;
     int ratePct = static_cast<int>(std::round((speed - 1.0) * 100.0));
     if (ratePct >= 0)
@@ -94,6 +98,16 @@ static bool Synthesize(
 {
     if (key.empty() || region.empty()) {
         LogE("Azure key or region not configured");
+        queue.MarkDone();
+        return false;
+    }
+    if (!Utils::IsSafeHostLabel(region, 32)) {
+        LogE("Azure region is not a valid host label: " + region);
+        queue.MarkDone();
+        return false;
+    }
+    if (Utils::HasControlChars(key)) {
+        LogE("Azure key contains control characters");
         queue.MarkDone();
         return false;
     }

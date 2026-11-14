@@ -146,6 +146,7 @@ public:
         // drops as "already finalized" — cached audio that was never played.
         std::lock_guard<std::mutex> lock(accMutex_);
         if (finalized_.load(std::memory_order_acquire)) return;  // late push after finalize
+        if (doneForwarded_.load(std::memory_order_acquire)) return;  // late push after completion
         accumulator_.insert(accumulator_.end(), chunk.begin(), chunk.end());
         // Forward to downstream consumer (downstream handles its own locking)
         downstream_->Push(std::move(chunk));
@@ -156,9 +157,29 @@ public:
     // decision is deferred to Finalize() so the pipeline can suppress
     // caching when the provider reports failure.
     void MarkDone() override {
-        if (doneForwarded_.exchange(true, std::memory_order_acq_rel)) return;
-        downstream_->MarkDone();
-        PCMQueue::MarkDone();  // this queue's own m_done, per the PCMQueue contract
+        std::exception_ptr ep;
+        {
+            // Serialize with Push()/Finalize(): a completion must not overtake a
+            // chunk that is mid-forward, and a late Push must see the latch.
+            std::lock_guard<std::mutex> lock(accMutex_);
+            // Complete this queue first so local consumers wake even if the
+            // downstream forward throws.
+            try {
+                PCMQueue::MarkDone();
+            } catch (...) {
+                ep = std::current_exception();
+            }
+            if (!doneForwarded_.exchange(true, std::memory_order_acq_rel)) {
+                try {
+                    downstream_->MarkDone();
+                } catch (...) {
+                    // Leave the latch clear so a later retry can re-forward.
+                    doneForwarded_.store(false, std::memory_order_release);
+                    if (!ep) ep = std::current_exception();
+                }
+            }
+        }
+        if (ep) std::rethrow_exception(ep);
     }
 
     // Latch the "failed" flag; any subsequent Finalize() will skip cache
@@ -197,8 +218,9 @@ public:
         try {
             MarkDone();
         } catch (...) {
-            // Preserve a commit exception as primary; swallow the completion
-            // failure only when there is nothing better to report.
+            // Preserve a commit exception as primary; MarkDone() has already
+            // set this queue's own done before attempting the forward, so the
+            // completion failure is not allowed to mask the commit failure.
             if (!ep) ep = std::current_exception();
         }
         if (ep) std::rethrow_exception(ep);

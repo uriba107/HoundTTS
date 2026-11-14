@@ -9,6 +9,7 @@
 #include <sstream>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace HoundTTS {
 
@@ -89,13 +90,19 @@ bool ElevenLabsTTS::SynthesizeToQueue(
         queue.MarkDone();
         return false;
     }
+    if (Utils::HasControlChars(apiKey)) {
+        LogE("ElevenLabs API key contains control characters");
+        queue.MarkDone();
+        return false;
+    }
     if (voiceId.empty()) {
         LogE("ElevenLabs voice ID not set (pass via provider_params.voice)");
         queue.MarkDone();
         return false;
     }
 
-    // Clamp speed to ElevenLabs supported range
+    // Clamp speed to ElevenLabs supported range (NaN bypasses both compares)
+    if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.7) speed = 0.7;
     if (speed > 1.2) speed = 1.2;
 

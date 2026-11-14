@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 #include <cstdio>
+#include <mutex>
 #include <string>
 
 namespace testing {
@@ -16,11 +17,13 @@ namespace testing {
 class Context {
 public:
     void Begin(const char* name) {
+        std::lock_guard<std::mutex> lock(mutex_);
         caseName_     = name;
         caseFailures_ = 0;
     }
 
     void End() {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (caseFailures_ == 0) {
             ++casesPassed_;
         } else {
@@ -32,6 +35,7 @@ public:
     }
 
     void Fail(const char* file, int line, const std::string& what) {
+        std::lock_guard<std::mutex> lock(mutex_);
         ++caseFailures_;
         ++checkFailures_;
         std::printf("  %s:%d: %s\n", file, line, what.c_str());
@@ -39,12 +43,14 @@ public:
 
     // Prints the tail summary and returns the process exit code.
     int Summary() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         std::printf("\n%d case(s) passed, %d case(s) failed, %d failed check(s)\n",
                     casesPassed_, casesFailed_, checkFailures_);
         return checkFailures_ == 0 ? 0 : 1;
     }
 
 private:
+    mutable std::mutex mutex_;
     std::string caseName_;
     int caseFailures_  = 0;
     int casesPassed_   = 0;
@@ -52,11 +58,23 @@ private:
     int checkFailures_ = 0;
 };
 
+// RAII case finalizer: ensures End() runs even if a test body breaks/returns.
+class CaseScope {
+public:
+    explicit CaseScope(Context& ctx) : ctx_(ctx) {}
+    ~CaseScope() { ctx_.End(); }
+    CaseScope(const CaseScope&) = delete;
+    CaseScope& operator=(const CaseScope&) = delete;
+private:
+    Context& ctx_;
+};
+
 } // namespace testing
 
 // CASE(ctx, "name") { ... } — opens and closes one test case.
 #define CASE(ctx, name) \
-    for (bool once_ = ((ctx).Begin(name), true); once_; once_ = false, (ctx).End())
+    for (bool once_ = ((ctx).Begin(name), true); once_; once_ = false) \
+        for (testing::CaseScope caseScope_((ctx)); once_; once_ = false)
 
 #define CHECK(ctx, cond) \
     do { if (!(cond)) (ctx).Fail(__FILE__, __LINE__, #cond); } while (0)

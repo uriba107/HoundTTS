@@ -26,20 +26,7 @@ std::string HexEncode(const unsigned char* data, size_t len) {
 }
 
 bool IsValidAwsRegion(const std::string& region) {
-    if (region.empty() || region.size() > 32) return false;
-    for (unsigned char c : region) {
-        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))
-            return false;
-    }
-    return true;
-}
-
-// CR/LF or other control characters in a value interpolated into the
-// Authorization header / canonical request: reject before signing.
-static bool HasControlChars(const std::string& s) {
-    for (unsigned char c : s)
-        if (c < 0x20 || c == 0x7F) return true;
-    return false;
+    return Utils::IsSafeHostLabel(region, 32);
 }
 
 std::string SHA256Hex(const std::string& data) {
@@ -116,11 +103,15 @@ std::string ComputeSigV4Auth(const std::string& accessKey,
         LogE("SigV4: missing required input");
         return "";
     }
-    if (HasControlChars(accessKey) || HasControlChars(secretKey) ||
-        HasControlChars(region) || HasControlChars(service) ||
-        HasControlChars(host) || HasControlChars(method) ||
-        HasControlChars(uri) || HasControlChars(amzDate) ||
-        HasControlChars(dateStamp)) {
+    if (!IsValidAwsRegion(region)) {
+        LogE("SigV4: invalid AWS region");
+        return "";
+    }
+    if (Utils::HasControlChars(accessKey) || Utils::HasControlChars(secretKey) ||
+        Utils::HasControlChars(region) || Utils::HasControlChars(service) ||
+        Utils::HasControlChars(host) || Utils::HasControlChars(method) ||
+        Utils::HasControlChars(uri) || Utils::HasControlChars(amzDate) ||
+        Utils::HasControlChars(dateStamp)) {
         LogE("SigV4: control character in input");
         return "";
     }

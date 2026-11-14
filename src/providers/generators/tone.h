@@ -10,7 +10,8 @@
 namespace HoundTTS {
 
 // Generates a fixed-frequency sine-wave tone and pushes it into queue.
-// durationS : length in seconds (>0; defaults to 2 if <=0)
+// durationS : length in seconds (>0; defaults to 2 if <=0; capped at 7200;
+//             non-finite -> 2.0)
 // volume    : 0.0–1.0
 // queue     : required — a null queue is rejected (logged) and the call returns.
 // When queue is non-null, calls queue->MarkDone() exactly once on every exit

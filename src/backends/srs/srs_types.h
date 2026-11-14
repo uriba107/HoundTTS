@@ -78,7 +78,8 @@ inline std::vector<FreqMod> ParseFreqMods(const std::string& freqs,
     }
 
     if (result.empty()) {
-        result.push_back({251000000.0, 0, false, 0});
+        // Preserve the caller's encryption intent on the fallback entry too.
+        result.push_back({251000000.0, 0, encrypt, encKey});
     }
     return result;
 }

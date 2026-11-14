@@ -109,14 +109,19 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                             if (!chunk.empty())
                                 encoder.EncodeChunk(chunk.data(), static_cast<int>(chunk.size()), *opusQueue);
                         }
-                        encoder.Flush(*opusQueue);
+                        // Don't flush into a queue whose consumer was already
+                        // marked done by an early-abort cleanup().
+                        if (!stopEncoder->load())
+                            encoder.Flush(*opusQueue);
                     }
                 } catch (const std::exception& e) {
                     LogFail("Opus encode exception", &e);
                 } catch (...) {
                     LogFail("Opus encode unknown exception");
                 }
-                opusQueue->MarkDone(); // always signal completion to the streamer
+                // Always signal completion to the streamer; best-effort since
+                // this runs on a detached thread.
+                try { opusQueue->MarkDone(); } catch (...) {}
             });
 
             // Connect + handshake + stream

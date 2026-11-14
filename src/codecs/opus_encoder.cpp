@@ -17,10 +17,12 @@ bool OpusFrameEncoder::Init() {
         opus_encoder_destroy(m_encoder);
         m_encoder = nullptr;
     }
+    // Clear unconditionally: a failed re-init must not leave stale samples to
+    // be emitted by a later successful Init().
+    m_buf.clear();
     int err = 0;
     m_encoder = opus_encoder_create(kSampleRate, kChannels, OPUS_APPLICATION_VOIP, &err);
     if (err != OPUS_OK || !m_encoder) return false;
-    m_buf.clear();
     return true;
 }
 
@@ -31,8 +33,9 @@ OpusFrameEncoder::~OpusFrameEncoder() {
     }
 }
 
-void OpusFrameEncoder::EncodeFrame(const int16_t* frame, AudioQueue& queue) {
-    if (!m_encoder || !frame) return;   // Init() not called/failed, or bad frame
+void OpusFrameEncoder::EncodeFrame(const int16_t* frame, int samples, AudioQueue& queue) {
+    // Init() not called/failed, bad frame, or a buffer shorter than one frame.
+    if (!m_encoder || !frame || samples < kFrameSamples) return;
     std::vector<uint8_t> packet(kMaxPacket);
     int len = opus_encode(m_encoder, frame, kFrameSamples,
                           packet.data(), kMaxPacket);
@@ -48,11 +51,18 @@ void OpusFrameEncoder::EncodeFrame(const int16_t* frame, AudioQueue& queue) {
 }
 
 void OpusFrameEncoder::EncodeChunk(const int16_t* pcm, int samples, AudioQueue& queue) {
+    // Don't accumulate audio when Init() was never called or failed: it would
+    // never be emitted and the buffer would grow without bound.
+    if (!m_encoder) return;
     if (!pcm || samples <= 0) return;
+    // Sanity bound for a single chunk (64 s of 16 kHz audio). Callers pass
+    // chunk.size(); this rejects a corrupted/oversized length before insert.
+    static constexpr int kMaxChunkSamples = 1 << 20;
+    if (samples > kMaxChunkSamples) return;
     m_buf.insert(m_buf.end(), pcm, pcm + samples);
 
     while ((int)m_buf.size() >= kFrameSamples) {
-        EncodeFrame(m_buf.data(), queue);
+        EncodeFrame(m_buf.data(), kFrameSamples, queue);
         m_buf.erase(m_buf.begin(), m_buf.begin() + kFrameSamples);
     }
 }
@@ -60,7 +70,7 @@ void OpusFrameEncoder::EncodeChunk(const int16_t* pcm, int samples, AudioQueue& 
 void OpusFrameEncoder::Flush(AudioQueue& queue) {
     if (m_buf.empty()) return;
     m_buf.resize(kFrameSamples, 0);
-    EncodeFrame(m_buf.data(), queue);
+    EncodeFrame(m_buf.data(), kFrameSamples, queue);
     m_buf.clear();
 }
 
