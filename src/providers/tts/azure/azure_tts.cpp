@@ -96,19 +96,22 @@ static bool Synthesize(
     double volume,
     PCMQueue& queue)
 {
+    // Note: completion (queue.MarkDone()) is owned solely by SynthesizeToQueue,
+    // so a throw from an internal step cannot make it fire twice.
     if (key.empty() || region.empty()) {
         LogE("Azure key or region not configured");
-        queue.MarkDone();
         return false;
     }
     if (!Utils::IsSafeHostLabel(region, 32)) {
         LogE("Azure region is not a valid host label: " + region);
-        queue.MarkDone();
         return false;
     }
     if (Utils::HasControlChars(key)) {
         LogE("Azure key contains control characters");
-        queue.MarkDone();
+        return false;
+    }
+    if (text.empty()) {
+        LogE("Empty text — nothing to synthesize");
         return false;
     }
 
@@ -149,17 +152,14 @@ static bool Synthesize(
 
     if (!res) {
         LogE("HTTP request failed (connection error)");
-        queue.MarkDone();
         return false;
     }
     if (res->status != 200) {
         LogE("HTTP " + std::to_string(res->status) + " body=[" + res->body + "]");
-        queue.MarkDone();
         return false;
     }
     if (res->body.empty()) {
         LogE("No PCM data received (empty body)");
-        queue.MarkDone();
         return false;
     }
 
@@ -177,14 +177,23 @@ static bool Synthesize(
             std::memcpy(&chunkSize, pcmData + off + 4, sizeof(chunkSize)); // RIFF is little-endian
             if (std::memcmp(pcmData + off, "data", 4) == 0) {
                 data = pcmData + off + 8;
-                dataLen = std::min<size_t>(chunkSize, pcmLen - (off + 8));
+                const size_t remaining = pcmLen - (off + 8);
+                // A size of 0 or one past the buffer means "not back-patched":
+                // use what is actually left rather than reporting no audio.
+                dataLen = (chunkSize > 0 && static_cast<size_t>(chunkSize) <= remaining)
+                              ? static_cast<size_t>(chunkSize)
+                              : remaining;
                 break;
             }
-            off += 8 + static_cast<size_t>(chunkSize) + (chunkSize & 1); // chunks are word-aligned
+            // Guard the advance: a hostile/corrupt size must not wrap and skip
+            // past the 'data' chunk or read out of bounds.
+            size_t advance = 8 + static_cast<size_t>(chunkSize);
+            if (chunkSize & 1u) ++advance;  // chunks are word-aligned
+            if (advance < 8 || advance > pcmLen - off) break;  // malformed
+            off += advance;
         }
         if (!data || dataLen == 0) {
             LogE("No 'data' chunk found in WAV response (" + std::to_string(pcmLen) + " bytes)");
-            queue.MarkDone();
             return false;
         }
         pcmData = data;
@@ -195,6 +204,9 @@ static bool Synthesize(
 
     std::vector<int16_t> samples = Utils::PcmBytesToSamples(pcmData, pcmLen);
     if (!samples.empty()) {
+        // Normalise before the branch: NaN would compare false and skip the
+        // scaling entirely, and >1.0 bypasses the clamp below.
+        if (!std::isfinite(volume) || volume > 1.0) volume = 1.0;
         if (volume < 1.0) {
             double vol = std::max(0.0, std::min(1.0, volume));
             for (auto& s : samples)
@@ -202,8 +214,6 @@ static bool Synthesize(
         }
         queue.Push(std::move(samples));
     }
-
-    queue.MarkDone();
     return true;
 }
 
@@ -218,15 +228,18 @@ bool AzureTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Single owner of completion: Synthesize() never calls MarkDone(), so a
+    // throw from one of its steps cannot deliver it twice.
+    bool result = false;
     try {
-        return Synthesize(text, key, region, voice, culture, gender, speed, volume, queue);
+        result = Synthesize(text, key, region, voice, culture, gender, speed, volume, queue);
     } catch (const std::exception& e) {
         LogE(std::string("Synthesis threw: ") + e.what());
     } catch (...) {
         LogE("Synthesis threw: unknown exception");
     }
     queue.MarkDone();
-    return false;
+    return result;
 }
 
 } // namespace HoundTTS

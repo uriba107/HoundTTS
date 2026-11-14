@@ -48,6 +48,35 @@ void PrimeCache() {
     cache.Clear();
 }
 
+// Downstream queue that fails a chosen Push (by 1-based call index) and the
+// first N MarkDone calls, so the wrapper's failure + retry paths can be driven
+// deterministically.
+class FlakyQueue : public PCMQueue {
+public:
+    explicit FlakyQueue(int failPushAt = 0, int failMarks = 0)
+        : failPushAt_(failPushAt), failMarks_(failMarks) {}
+
+    void Push(std::vector<int16_t> chunk) override {
+        ++pushes_;
+        if (failPushAt_ > 0 && pushes_ == failPushAt_)
+            throw std::runtime_error("push failed");
+        PCMQueue::Push(std::move(chunk));
+    }
+
+    void MarkDone() override {
+        ++marks_;
+        if (failMarks_ > 0) { --failMarks_; throw std::runtime_error("mark done failed"); }
+        PCMQueue::MarkDone();
+    }
+
+    int pushes_ = 0;
+    int marks_  = 0;
+
+private:
+    int failPushAt_;
+    int failMarks_;
+};
+
 } // namespace
 
 void RunPcmQueueTests(testing::Context& ctx) {
@@ -234,5 +263,102 @@ void RunPcmQueueTests(testing::Context& ctx) {
         CHECK(ctx, cached != nullptr);
         if (cached) CHECK_EQ_INT(ctx, cached->size(), 1);
         CHECK_EQ_INT(ctx, DrainAll(*downstream).size(), 1);
+    }
+
+    // --- Completion retry contract (PaddedPCMQueue::MarkDone) ---------------
+    // A downstream failure must still get exactly one tail pad, completion must
+    // be delivered (or re-forwarded if the retry also fails), and the original
+    // exception must reach the caller.
+
+    CASE(ctx, "PaddedPCMQueue retries completion without duplicating the tail pad") {
+        auto downstream = std::make_shared<FlakyQueue>(0, 1);  // first MarkDone throws
+        PaddedPCMQueue padded(downstream, 2);
+
+        padded.Push({1});
+        bool threw = false;
+        try {
+            padded.MarkDone();
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(ctx, threw);                    // original failure preserved
+        CHECK_EQ_INT(ctx, downstream->marks_, 2);    // failed attempt + retry
+        CHECK_EQ_INT(ctx, downstream->pushes_, 3);   // lead-in + chunk + tail (once)
+
+        const std::vector<int16_t> all = DrainAll(*downstream);
+        CHECK_EQ_INT(ctx, all.size(), 2u + 1u + 2u);
+        CHECK_EQ_INT(ctx, all[2], 1);
+        CHECK(ctx, downstream->IsDone());
+
+        // Latch re-armed on the successful retry: no duplicate completion.
+        padded.MarkDone();
+        CHECK_EQ_INT(ctx, downstream->marks_, 2);
+        CHECK_EQ_INT(ctx, downstream->pushes_, 3);
+    }
+
+    CASE(ctx, "PaddedPCMQueue keeps the latch clear when both completion attempts fail") {
+        auto downstream = std::make_shared<FlakyQueue>(0, 2);  // both MarkDone throw
+        PaddedPCMQueue padded(downstream, 2);
+
+        padded.Push({5});
+        bool threw = false;
+        try {
+            padded.MarkDone();
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(ctx, threw);
+        CHECK_EQ_INT(ctx, downstream->marks_, 2);   // original + one retry
+        CHECK(ctx, !downstream->IsDone());          // completion not delivered yet
+
+        // Latch stayed clear, so a later MarkDone re-forwards — and the tail pad
+        // is not emitted a second time.
+        padded.MarkDone();
+        CHECK_EQ_INT(ctx, downstream->marks_, 3);
+        CHECK_EQ_INT(ctx, downstream->pushes_, 3);
+
+        const std::vector<int16_t> all = DrainAll(*downstream);
+        CHECK_EQ_INT(ctx, all.size(), 2u + 1u + 2u);
+        CHECK(ctx, downstream->IsDone());
+    }
+
+    CASE(ctx, "PaddedPCMQueue re-issues the tail pad when its own push failed") {
+        auto downstream = std::make_shared<FlakyQueue>(3, 0);  // tail push is #3 -> throws
+        PaddedPCMQueue padded(downstream, 2);
+
+        padded.Push({9});   // lead-in (#1) + chunk (#2) both succeed
+        bool threw = false;
+        try {
+            padded.MarkDone();
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(ctx, threw);
+        CHECK_EQ_INT(ctx, downstream->pushes_, 4);  // tail was re-issued by the retry
+        CHECK_EQ_INT(ctx, downstream->marks_, 1);   // downstream completion delivered
+
+        const std::vector<int16_t> all = DrainAll(*downstream);
+        CHECK_EQ_INT(ctx, all.size(), 2u + 1u + 2u);  // tail emitted exactly once
+        CHECK(ctx, downstream->IsDone());
+    }
+
+    CASE(ctx, "PaddedPCMQueue re-issues the lead-in when its push failed") {
+        auto downstream = std::make_shared<FlakyQueue>(1, 0);  // lead-in push throws
+        PaddedPCMQueue padded(downstream, 2);
+
+        bool threw = false;
+        try {
+            padded.Push({1});
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(ctx, threw);
+
+        padded.Push({1});   // retry: the lead-in latch was never armed
+        padded.MarkDone();
+
+        const std::vector<int16_t> all = DrainAll(*downstream);
+        CHECK_EQ_INT(ctx, all.size(), 2u + 1u + 2u);
+        CHECK_EQ_INT(ctx, all[2], 1);
     }
 }

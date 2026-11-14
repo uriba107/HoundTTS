@@ -42,6 +42,7 @@ public:
     // Returns chunk, or empty vector if timed out.
     // Sets *done=true when producer has finished AND queue is empty.
     std::vector<int16_t> Pop(int timeoutMs, bool* done) {
+        if (!done) return {}; // caller contract: `done` is required
         std::unique_lock<std::mutex> lock(m_mutex);
         if (m_queue.empty()) {
             m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
@@ -86,6 +87,12 @@ constexpr int    PTT_PAD_SAMPLES = static_cast<int>(PTT_PAD_SEC * 16000);
 // audio to simulate a PTT lead-in / tail.  The downstream queue (and any
 // CachingPCMQueue above it) sees the silence as regular PCM, so cached
 // entries include the padding.
+//
+// Nesting is one-way: PaddedPCMQueue must be the OUTER wrapper (pad → cache →
+// PCMQueue). Both wrappers hold their own mutex across the downstream forward,
+// so nesting them the other way inverts the lock order (opMutex_ -> accMutex_
+// here vs accMutex_ -> opMutex_ in CachingPCMQueue::Push) and can deadlock.
+// See the lock-order note on CachingPCMQueue in pcm_cache.h.
 // ---------------------------------------------------------------------------
 class PaddedPCMQueue : public PCMQueue {
 public:
@@ -105,8 +112,12 @@ public:
         // Serialize them so tail silence/completion cannot overtake a chunk.
         std::lock_guard<std::mutex> lock(opMutex_);
         if (doneSent_.load(std::memory_order_acquire)) return;  // late push after completion
-        if (!leadInSent_.exchange(true))
+        // Latch only once the lead-in actually reached the downstream queue: a
+        // throwing forward must still get its 200ms PTT lead-in on a retry.
+        if (!leadInSent_.load(std::memory_order_acquire)) {
             downstream_->Push(std::vector<int16_t>(padSamples_, 0));
+            leadInSent_.store(true, std::memory_order_release);
+        }
         downstream_->Push(std::move(chunk));
     }
 
@@ -116,15 +127,16 @@ public:
             std::lock_guard<std::mutex> lock(opMutex_);
             if (!doneSent_.exchange(true)) {
                 try {
-                    if (leadInSent_.load())
-                        downstream_->Push(std::vector<int16_t>(padSamples_, 0));
-                    downstream_->MarkDone();
+                    ForwardDone_NoLock();
                 } catch (...) {
-                    // Forwarding failed: reset the latch so a later retry can
-                    // re-forward, and best-effort one immediate retry.
+                    // Forwarding failed: best-effort one immediate retry, then
+                    // re-arm the latch so a later MarkDone() cannot re-forward.
                     ep = std::current_exception();
                     doneSent_.store(false);
-                    try { downstream_->MarkDone(); } catch (...) {}
+                    try {
+                        ForwardDone_NoLock();
+                        doneSent_.store(true, std::memory_order_release);
+                    } catch (...) {}
                 }
             }
             // Always complete this queue locally, even if the forward failed.
@@ -138,10 +150,22 @@ public:
     }
 
 private:
+    // Tail-silence push + downstream completion. Idempotent per step, so a
+    // retry after a partially successful attempt does not duplicate the pad.
+    void ForwardDone_NoLock() {
+        if (leadInSent_.load(std::memory_order_acquire) &&
+            !tailSent_.load(std::memory_order_acquire)) {
+            downstream_->Push(std::vector<int16_t>(padSamples_, 0));
+            tailSent_.store(true, std::memory_order_release);
+        }
+        downstream_->MarkDone();
+    }
+
     std::shared_ptr<PCMQueue> downstream_;
     int padSamples_;
     std::mutex opMutex_;   // serializes Push/MarkDone forwarding
     std::atomic<bool> leadInSent_{false};
+    std::atomic<bool> tailSent_{false};
     std::atomic<bool> doneSent_{false};
 };
 

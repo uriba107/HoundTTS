@@ -127,7 +127,7 @@ static HRESULT FindVoiceByName(const std::wstring& name, ISpObjectToken** ppToke
 static size_t PcmDataOffset(const void* data, size_t byteCount, size_t& pcmBytes) {
     const uint8_t* bytes = static_cast<const uint8_t*>(data);
     pcmBytes = byteCount;
-    if (byteCount < 12 || std::memcmp(bytes, "RIFF", 4) != 0 ||
+    if (!bytes || byteCount < 12 || std::memcmp(bytes, "RIFF", 4) != 0 ||
         std::memcmp(bytes + 8, "WAVE", 4) != 0) {
         return 0;
     }
@@ -146,7 +146,7 @@ static size_t PcmDataOffset(const void* data, size_t byteCount, size_t& pcmBytes
         pos = payload + chunkSize + (chunkSize & 1u);  // odd-sized chunks are padded
     }
     pcmBytes = 0;  // RIFF container without a data chunk: emit no audio
-    return byteCount;
+    return 0;      // keep the source pointer in bounds (zero bytes are read anyway)
 }
 
 } // anonymous namespace

@@ -142,6 +142,7 @@ static void CALLBACK TimerProc(UINT, UINT, DWORD_PTR dwUser, DWORD_PTR, DWORD_PT
         auto packet = SRSClient::BuildVoicePacket(
             frame, *s->freqs, s->unitId,
             s->packetId.fetch_add(1), *s->guid);
+        if (packet.empty()) return;  // inputs outgrew the uint16 length fields
 
         sendto(s->udpSock,
                reinterpret_cast<const char*>(packet.data()),
@@ -406,15 +407,21 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
            reinterpret_cast<const sockaddr*>(&udpAddr),
            sizeof(udpAddr));
 
-    // Wait for startup buffer (5 frames = ~200ms) before starting timer
+    // Wait for startup buffer (5 frames = ~200ms) before starting timer.
+    // Also honour the session kill signal: an aborted session must not sit here
+    // for the full deadline waiting for frames that will never arrive.
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue.Size() < 5 && !queue.IsDone()) {
+    while (queue.Size() < 5 && !queue.IsDone() &&
+           !(session && !session->alive.load())) {
         if (std::chrono::steady_clock::now() > deadline) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    // Set up timer state
-    TimerState state;
+    // Set up timer state. Heap-allocated so a callback that outlives the drain
+    // wait below cannot be left pointing at a destroyed object: on timeout the
+    // state is deliberately leaked instead of freed under a running callback.
+    auto stateOwner = std::make_unique<TimerState>();
+    TimerState& state = *stateOwner;
     state.queue        = &queue;
     state.freqs        = &freqs;
     state.unitId       = unitId;
@@ -477,6 +484,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     struct StreamCleanup {
         MMRESULT timerId;
         TimerState* state;
+        std::unique_ptr<TimerState>& owner;
         std::shared_ptr<SRSPositionData> posData;
         ~StreamCleanup() {
             // Runs during stack unwinding too: nothing may throw out of it.
@@ -485,13 +493,19 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
                     // Publish the stop first, then kill: a callback that has already
                     // started sees `stopping` and returns without touching `state`.
                     // timeKillEvent does not abort a callback in flight, so wait for
-                    // the counter to drain before `state` (a stack local) dies.
+                    // the counter to drain before `state` dies.
                     state->stopping.store(true, std::memory_order_seq_cst);
                     timeKillEvent(timerId);
                     for (int i = 0; i < 20000 && state->callbacks.load() != 0; ++i)
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    if (state->callbacks.load() != 0)
-                        try { LogE("SRS timer callback did not drain before teardown"); } catch (...) {}
+                    if (state->callbacks.load() != 0) {
+                        // A callback is still running and may touch `state` when
+                        // it resumes. Destroying it here would be a use-after-free,
+                        // and blocking forever would wedge the TTS worker, so the
+                        // state is leaked deliberately: bounded memory, no UAF.
+                        try { LogE("SRS timer callback did not drain; leaking timer state"); } catch (...) {}
+                        owner.release();
+                    }
                 }
                 timeEndPeriod(1);
                 if (posData) {
@@ -504,7 +518,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
                 try { LogE("StreamCleanup unknown exception"); } catch (...) {}
             }
         }
-    } streamCleanup{timerId, &state, posData};
+    } streamCleanup{timerId, &state, stateOwner, posData};
     if (timerId == 0) {
         // No timer → nothing will ever drain the queue or set state.finished.
         // Abort cleanly instead of spinning forever in the wait loop below.
@@ -627,12 +641,14 @@ std::vector<uint8_t> SRSClient::BuildVoicePacket(
     // RelayGUID (22 bytes, zero-padded if shorter)
     std::memset(p, 0, 22);
     size_t gLen = std::min(guid.size(), (size_t)22);
-    std::memcpy(p, guid.data(), gLen);
+    if (gLen > 0)  // memcpy from a null source is UB even for zero bytes
+        std::memcpy(p, guid.data(), gLen);
     p += 22;
 
     // OriginGUID (same as RelayGUID for non-relay)
     std::memset(p, 0, 22);
-    std::memcpy(p, guid.data(), gLen);
+    if (gLen > 0)
+        std::memcpy(p, guid.data(), gLen);
     // p += 22; // last field, no need to advance
 
     return pkt;

@@ -68,7 +68,6 @@ add_library(HoundTTS SHARED
     src/config_reader.cpp
     src/utils.cpp
     src/backends/pcm_cache.cpp
-    src/process_launcher.cpp
     src/codecs/opus_encoder.cpp
     # Generators
     src/providers/generators/tone.cpp

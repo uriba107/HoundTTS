@@ -85,6 +85,9 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
             }
             float t   = static_cast<float>(samplesGenerated + i) / kSampleRate;
             float val = std::sin(k2Pi * freqHz * t);
+            // sin() can return marginally outside [-1, 1]; an unclamped cast to
+            // int16_t would be UB. Mirror noise.cpp.
+            val = std::max(-1.0f, std::min(1.0f, val));
             chunk[i] = static_cast<int16_t>(val * 32767.0f * vol);
         }
 

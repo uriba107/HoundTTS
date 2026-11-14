@@ -196,6 +196,11 @@ bool PiperTTS::SynthesizeViaNative(
     auto& pool   = PiperModelPool::Instance();
     auto& native = PiperNative::Instance();
 
+    // Owned copy taken BEFORE any handle is acquired: after Acquire() the
+    // release guard must exist, so nothing that can throw (this copy) may run
+    // in between.
+    std::string modelPathOwned = modelPath;
+
     piper_synthesizer* synth = pool.Acquire(modelPath, espeakDataPath);
     if (!synth) {
         LogE("Failed to acquire synthesizer for model: " + modelPath);
@@ -203,18 +208,10 @@ bool PiperTTS::SynthesizeViaNative(
         return false;
     }
 
-    // Completion is signalled even if Resample/Push/allocation throws: a
-    // downstream consumer would otherwise block in PCMQueue::Pop() forever.
-    // MarkDone is idempotent, so the explicit call on the normal path is safe.
-    struct DoneGuard {
-        PCMQueue& q;
-        ~DoneGuard() noexcept {
-            try { q.MarkDone(); } catch (...) {}
-        }
-    } doneGuard{queue};
-
     // Return the synthesizer on every exit path — including a throw from
     // queue.Push() or a PCM allocation — so the active slot is never leaked.
+    // Built from an already-owned string, so its construction cannot throw
+    // between taking the handle and guarding it.
     struct PoolGuard {
         PiperModelPool& pool;
         std::string modelPath;   // owned copy: self-contained guard
@@ -230,7 +227,19 @@ bool PiperTTS::SynthesizeViaNative(
                 try { LogE("PoolGuard::Release failed: unknown exception"); } catch (...) {}
             }
         }
-    } guard{pool, modelPath, synth};
+    } guard{pool, std::move(modelPathOwned), synth};
+
+    // Declared AFTER the guard, so it is destroyed FIRST: completion is
+    // signalled before the synthesizer goes back to the pool, never after.
+    // Completion is signalled even if Resample/Push/allocation throws: a
+    // downstream consumer would otherwise block in PCMQueue::Pop() forever.
+    // MarkDone is idempotent, so the explicit call on the normal path is safe.
+    struct DoneGuard {
+        PCMQueue& q;
+        ~DoneGuard() noexcept {
+            try { q.MarkDone(); } catch (...) {}
+        }
+    } doneGuard{queue};
 
     // Resolve speaker ID (numeric or named, with bounds check and name fallback)
     std::string modelJson = ReadModelJson(modelPath);

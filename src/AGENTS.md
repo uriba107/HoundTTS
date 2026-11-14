@@ -17,7 +17,6 @@ Native C++17 DLL (`HoundTTS.dll`) that exposes TTS and translation functions to 
 - `audio_queue.h` — PCM accumulation buffer
 - `session.h` — `Session` struct with position/alive tracking
 - `speech_time.h` — Speech duration estimation
-- `process_launcher.cpp/h` — Subprocess launcher (legacy piper.exe fallback)
 - `utils.cpp/h` — Logging (`Logger`), HTTP helpers, `NormalizeProviderToken`
 - `version.rc.in` — Windows version resource template (CMake `@ONLY`)
 

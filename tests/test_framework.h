@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 #include <cstdio>
+#include <exception>
 #include <mutex>
 #include <string>
 
@@ -59,15 +60,29 @@ private:
 };
 
 // RAII case finalizer: ensures End() runs even if a test body breaks/returns.
+// An exception escaping the body would otherwise record the case as PASSED
+// (no CHECK failed), so detect the in-flight exception and fail the case.
 class CaseScope {
 public:
     explicit CaseScope(Context& ctx) : ctx_(ctx) {}
-    ~CaseScope() { ctx_.End(); }
+    ~CaseScope() {
+        if (std::uncaught_exceptions() > 0) {
+            try {
+                ctx_.Fail(__FILE__, __LINE__, "uncaught exception escaped the test case");
+            } catch (...) {}
+        }
+        ctx_.End();
+    }
     CaseScope(const CaseScope&) = delete;
     CaseScope& operator=(const CaseScope&) = delete;
 private:
     Context& ctx_;
 };
+
+// Null-safe conversion for CHECK_STR_EQ: constructing std::string from a null
+// const char* is UB, so report it instead of crashing the test process.
+inline std::string ToString(const std::string& s) { return s; }
+inline std::string ToString(const char* s) { return s ? std::string(s) : std::string("(null)"); }
 
 } // namespace testing
 
@@ -92,8 +107,8 @@ private:
 
 #define CHECK_STR_EQ(ctx, actual, expected) \
     do { \
-        const std::string a_ = (actual); \
-        const std::string e_ = (expected); \
+        const std::string a_ = testing::ToString(actual); \
+        const std::string e_ = testing::ToString(expected); \
         if (a_ != e_) { \
             (ctx).Fail(__FILE__, __LINE__, \
                 std::string(#actual " == " #expected " (\"") + \

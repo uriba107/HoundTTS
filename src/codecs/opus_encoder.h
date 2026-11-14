@@ -49,8 +49,8 @@ private:
     OpusEncoder* m_encoder = nullptr;
     std::vector<int16_t> m_buf;   // partial-frame accumulator
 
-    // Requires at least kFrameSamples valid samples in `frame`.
-    void EncodeFrame(const int16_t* frame, int samples, AudioQueue& queue);
+    // Requires exactly kFrameSamples valid samples in `frame`.
+    void EncodeFrame(const int16_t* frame, AudioQueue& queue);
 };
 
 } // namespace HoundTTS

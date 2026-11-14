@@ -108,15 +108,16 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
     // --- Cache miss: wrap queue with CachingPCMQueue to capture output,
     // then PaddedPCMQueue to inject 200ms silence before/after speech.
     // Chain: Provider → PaddedPCMQueue → CachingPCMQueue → PCMQueue.
-    // effectiveQueue is kept for error/abort paths (bypass padding).
+    // The nesting order is load-bearing, not cosmetic: each wrapper holds its
+    // own mutex across the downstream forward, so reversing it (cache outside
+    // pad) inverts the lock order and can deadlock — see the lock-order note
+    // on CachingPCMQueue in backends/pcm_cache.h.
     // On cache hit the padded PCM replays directly — no double-padding.
-    std::shared_ptr<PCMQueue> effectiveQueue = queue;
-    std::shared_ptr<PCMQueue> dispatchQueue  = queue;
+    std::shared_ptr<PCMQueue> dispatchQueue = queue;
     std::shared_ptr<CachingPCMQueue> cachingQueue;
     if (cacheable) {
         cachingQueue = std::make_shared<CachingPCMQueue>(queue, cacheKey);
-        effectiveQueue = cachingQueue;
-        dispatchQueue  = std::make_shared<PaddedPCMQueue>(effectiveQueue);
+        dispatchQueue = std::make_shared<PaddedPCMQueue>(cachingQueue);
     }
 
     // Helper: committed only when a caching wrapper is in use. Providers
@@ -303,8 +304,10 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
                 // Default voice also not available, abort synthesis
                 LogE("Default Piper voice not available. Aborting synthesis.");
                 if (cachingQueue) cachingQueue->MarkFailed();
-                effectiveQueue->MarkDone();
-                finalizeCache(false);
+                // Route through complete() like every other path: MarkDone on a
+                // padded queue allocates and can throw, which would skip the
+                // cache finalize and strand the consumer.
+                complete(false);
                 return;
             }
             

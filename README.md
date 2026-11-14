@@ -950,7 +950,6 @@ src/
 ├── backend.h            # ITTSBackend interface + TTSRequest struct
 ├── config_reader.*      # INI parser singleton (reads HoundTTS-credentials.ini)
 ├── audio_queue.h        # Thread-safe Opus frame queue (used by codecs + backends)
-├── process_launcher.*   # Async CreateProcess wrapper
 ├── speech_time.h        # Speech time estimation
 ├── utils.h              # String/path/registry helpers
 ├── codecs/

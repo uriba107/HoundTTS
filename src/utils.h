@@ -41,13 +41,28 @@ enum class LogLevel { LEVEL_ERROR = 0, LEVEL_INFO = 1, LEVEL_DEBUG = 2 };
 // NOTE: the callable is moved into the thread and outlives this function, so
 // callers must capture by value (shared_ptr, copies). Capturing a local by
 // reference is a use-after-free.
+//
+// The callable also runs with no exception boundary of its own: an escaping
+// exception reaches the thread entry point and calls std::terminate, which in
+// a DLL means taking DCS down with it. Swallow (and surface) it here instead.
 template <typename F>
 inline void SpawnDetached(F&& f) {
-    std::thread t(std::forward<F>(f));
+    std::thread t([fn = std::forward<F>(f)]() mutable {
+        try {
+            fn();
+        } catch (...) {
+            // No Logger yet at this point in the header, and allocating in a
+            // catch handler can throw again: emit a fixed, lock-free line.
+            OutputDebugStringA("[HoundTTS] uncaught exception on detached thread\n");
+        }
+    });
     try {
         t.detach();
     } catch (...) {
-        t.join();   // never leave a joinable thread behind
+        // detach() failed: never leave a joinable thread behind. join() itself
+        // can throw, and an escaping exception here would hit the joinable
+        // thread's destructor -> std::terminate.
+        try { t.join(); } catch (...) {}
     }
 }
 
@@ -188,8 +203,8 @@ std::string JsonEscape(const std::string& s);
 // Decode the body of a JSON string literal, starting just after the opening
 // quote at `pos`. Handles all short escapes plus \uXXXX, combining UTF-16
 // surrogate pairs into a single code point. Lone surrogates become '?'.
-// If `endPos` is non-null it receives the index of the closing quote (or
-// s.size() when the string is unterminated).
+// If `endPos` is non-null it receives the index just PAST the closing quote
+// (i.e. where parsing should continue), or s.size() when unterminated.
 std::string JsonDecodeString(const std::string& s, size_t pos,
                              size_t* endPos = nullptr);
 
@@ -198,7 +213,8 @@ std::string JsonDecodeString(const std::string& s, size_t pos,
 bool HasControlChars(const std::string& s);
 
 // True when `s` is a plausible DNS label: lowercase letters, digits and '-',
-// at most `maxLen` chars. Used for region/endpoint fragments from config.
+// at most `maxLen` chars, with no leading/trailing or consecutive hyphens.
+// Used for region/endpoint fragments from config.
 bool IsSafeHostLabel(const std::string& s, size_t maxLen = 32);
 
 // True when `code` is a plausible ISO 639-1/2 language code: 2-3 ASCII letters.

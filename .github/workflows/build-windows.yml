@@ -176,9 +176,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "docker build (deps) failed" }
           docker tag "${{ env.DEPS_IMAGE }}:${tag}" "${{ env.DEPS_IMAGE }}:current"
           if ($LASTEXITCODE -ne 0) { throw "docker tag (deps -> current) failed" }
-          docker push "${{ env.DEPS_IMAGE }}:${tag}"
-          if ($LASTEXITCODE -ne 0) {
-            throw "docker push deps image failed - downstream jobs require the image on GHCR"
+          # Pushing the cache image needs a writable token: a fork PR gets a
+          # read-only GITHUB_TOKEN, so the push would 403 and fail the PR check
+          # for no benefit. The build below reuses the local `:current` tag.
+          if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
+            docker push "${{ env.DEPS_IMAGE }}:${tag}"
+            if ($LASTEXITCODE -ne 0) {
+              throw "docker push deps image failed - downstream jobs require the image on GHCR"
+            }
+          } else {
+            Write-Host "Skipping deps image push on pull_request"
           }
 
       # ----------------------------------------------------------
@@ -324,7 +331,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
-      packages: read
 
     steps:
       - name: Download base package

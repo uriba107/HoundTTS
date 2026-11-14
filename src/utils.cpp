@@ -40,7 +40,9 @@ static void AppendUtf8(std::string& out, unsigned int cp) {
 std::string JsonEscape(const std::string& s) {
     static const char* kHex = "0123456789abcdef";
     std::string out;
-    out.reserve(s.size() * 2);
+    // Worst case is 6 output bytes per input byte ("\u00XX" for a control
+    // character). Guard the multiply so a huge input cannot wrap the reserve.
+    if (s.size() <= s.max_size() / 6) out.reserve(s.size() * 6);
     for (unsigned char c : s) {
         switch (c) {
         case '"':  out += "\\\""; break;
@@ -153,9 +155,20 @@ bool HasControlChars(const std::string& s) {
 
 bool IsSafeHostLabel(const std::string& s, size_t maxLen) {
     if (s.empty() || s.size() > maxLen) return false;
+    // DNS-label shape, not just an allowed character set: no leading/trailing
+    // hyphen and no "--". A region fragment like "-evil" would otherwise pass
+    // and get interpolated into "<region>.tts.speech.microsoft.com".
+    if (s.front() == '-' || s.back() == '-') return false;
+    bool prevHyphen = false;
     for (unsigned char c : s) {
         if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))
             return false;
+        if (c == '-') {
+            if (prevHyphen) return false;
+            prevHyphen = true;
+        } else {
+            prevHyphen = false;
+        }
     }
     return true;
 }

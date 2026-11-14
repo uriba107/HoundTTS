@@ -88,6 +88,30 @@ void RunUtilsTests(testing::Context& ctx) {
         CHECK(ctx, !Utils::IsAlphaLanguageCode("\xC3\xA9n"));  // non-ASCII é
     }
 
+    CASE(ctx, "HasControlChars rejects C0/DEL, allows normal values") {
+        CHECK(ctx, !Utils::HasControlChars(""));
+        CHECK(ctx, !Utils::HasControlChars("eastus-key_123.abc"));
+        CHECK(ctx, Utils::HasControlChars("a\r\nb"));   // CRLF header injection
+        CHECK(ctx, Utils::HasControlChars(std::string(1, '\x01')));
+        CHECK(ctx, Utils::HasControlChars(std::string(1, '\x7f')));
+        CHECK(ctx, Utils::HasControlChars("tab\tinside"));   // tab is < 0x20 too
+    }
+
+    CASE(ctx, "IsSafeHostLabel enforces DNS-label shape") {
+        CHECK(ctx, Utils::IsSafeHostLabel("eastus"));
+        CHECK(ctx, Utils::IsSafeHostLabel("west-europe"));
+        CHECK(ctx, Utils::IsSafeHostLabel("eastus2"));
+        CHECK(ctx, !Utils::IsSafeHostLabel(""));
+        CHECK(ctx, !Utils::IsSafeHostLabel("-evil"));      // leading hyphen
+        CHECK(ctx, !Utils::IsSafeHostLabel("evil-"));      // trailing hyphen
+        CHECK(ctx, !Utils::IsSafeHostLabel("a--b"));       // consecutive hyphens
+        CHECK(ctx, !Utils::IsSafeHostLabel("-"));          // both ends
+        CHECK(ctx, !Utils::IsSafeHostLabel("east.us"));    // dot is not part of a label
+        CHECK(ctx, !Utils::IsSafeHostLabel("eastus\n"));   // no control chars
+        CHECK(ctx, Utils::IsSafeHostLabel("abcdef", 6));
+        CHECK(ctx, !Utils::IsSafeHostLabel("abcdefg", 6));  // over length
+    }
+
     CASE(ctx, "PcmBytesToSamples copies whole samples and ignores a trailing byte") {
         const unsigned char raw[5] = {0x01, 0x00, 0x02, 0x00, 0x03};
         const std::vector<int16_t> s = Utils::PcmBytesToSamples(raw, sizeof(raw));

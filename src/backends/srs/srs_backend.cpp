@@ -6,6 +6,7 @@
 #include "utils.h"
 
 #include <thread>
+#include <chrono>
 #include <string>
 #include <memory>
 #include <vector>
@@ -69,6 +70,11 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         // encoder keeps encoding into a queue nobody drains until the producer
         // finishes, which can grow unbounded.
         auto stopEncoder = std::make_shared<std::atomic<bool>>(false);
+        // Set by the encoder thread once it has stopped consuming PCM and
+        // signalled opusQueue. cleanup() waits on it (bounded) before marking
+        // the queue done itself: the encoder may still be inside Pop() (500 ms
+        // timeout) and could otherwise Push a frame after completion.
+        auto encoderDone = std::make_shared<std::atomic<bool>>(false);
 
         // Shared teardown: clears SRS position-sync callback, drains the opus
         // queue, detaches backend data, flags the session dead, and removes it
@@ -79,6 +85,11 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
             // or std::terminate takes DCS down.
             try {
                 stopEncoder->store(true);
+                // Bounded wait (the encoder's Pop timeout is 500 ms): wait for
+                // it to observe stopEncoder and finish before the queue is
+                // marked done, so Push-after-MarkDone cannot happen.
+                for (int i = 0; i < 400 && !encoderDone->load(); ++i)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 opusQueue->MarkDone();
                 if (posData) { std::lock_guard<std::mutex> lk(posData->syncMutex); posData->sendPositionSync = nullptr; }
                 if (session) {
@@ -97,7 +108,7 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         // DCS, skipping cleanup() (leaving the session registered). Catch it,
         // log, and still run cleanup.
         try {
-            SpawnDetached([pcm, opusQueue, stopEncoder]() {
+            SpawnDetached([pcm, opusQueue, stopEncoder, encoderDone]() {
                 try {
                     OpusFrameEncoder encoder;
                     if (!encoder.Init()) {
@@ -122,6 +133,8 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                 // Always signal completion to the streamer; best-effort since
                 // this runs on a detached thread.
                 try { opusQueue->MarkDone(); } catch (...) {}
+                // Published last: cleanup() treats this as "no more Pushes".
+                encoderDone->store(true, std::memory_order_release);
             });
 
             // Connect + handshake + stream

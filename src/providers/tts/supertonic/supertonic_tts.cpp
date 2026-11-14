@@ -9,6 +9,7 @@
 #include <mutex>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <atomic>
 #include <condition_variable>
@@ -166,6 +167,10 @@ public:
                                 std::vector<float>& out_pcm,
                                 int& out_sample_rate) {
         std::unique_lock<std::shared_mutex> writeLock(styleMutex_);
+        // Output contract: on every path (early return, failure, exception) the
+        // caller sees a defined value rather than stale/uninitialised data.
+        out_pcm.clear();
+        out_sample_rate = 0;
         // Snapshot the context under ctxMutex_ (lock order: styleMutex_ ->
         // ctxMutex_) so a concurrent EnsureContext()/reassignment cannot be
         // observed mid-use. The pointer is stable for the pool's lifetime.
@@ -302,6 +307,10 @@ bool SupertonicTTS::SynthesizeToQueue(
     }
 
     auto& pool = SupertonicPool::Instance();
+
+    // NaN/Inf would bypass the range clamp in the native synthesizer and is UB
+    // there; normalise like every other TTS provider.
+    if (!std::isfinite(speed)) speed = 1.0f;
 
     // Ensure context is created
     if (!pool.EnsureContext(modelPath, threads)) {

@@ -127,6 +127,14 @@ private:
 //                       to the downstream queue (idempotent).
 //
 // Requires: downstream must be non-null (throws std::invalid_argument if null).
+//
+// Lock order: this wrapper must sit INSIDE a PaddedPCMQueue, i.e. the only
+// supported chain is PaddedPCMQueue -> CachingPCMQueue -> PCMQueue (as built
+// by TTSPipeline::Produce). Push()/MarkDone() hold accMutex_ across the
+// downstream forward, while PaddedPCMQueue holds opMutex_ across its own, so
+// nesting cache-over-pad would acquire accMutex_ -> opMutex_ on Push against
+// opMutex_ -> accMutex_ on completion and can deadlock. A wrapper must never
+// hold its own mutex across a downstream call that takes another wrapper's.
 // ---------------------------------------------------------------------------
 class CachingPCMQueue : public PCMQueue {
 public:

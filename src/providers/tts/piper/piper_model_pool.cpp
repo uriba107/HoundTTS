@@ -77,7 +77,14 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
         return nullptr;
     }
 
-    LogI("Model loaded: " + modelPath);
+    // A throwing log (allocation) must not strand the handle: the slot guard is
+    // still armed, so free the synthesizer and let it release the active slot.
+    try {
+        LogI("Model loaded: " + modelPath);
+    } catch (...) {
+        native.Free(synth);
+        throw;
+    }
     slotGuard.disarmed = true;
     return synth;
 }
@@ -136,8 +143,10 @@ void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* sy
     }
 
     if (!stored) {
-        LogI("Pool cap reached for model, destroying excess instance: " + modelPath);
+        // Free before logging: a throwing log must not skip the cleanup and
+        // leak the handle (the slot guard would still release the slot).
         PiperNative::Instance().Free(synth);
+        try { LogI("Pool cap reached for model, destroying excess instance: " + modelPath); } catch (...) {}
     }
 }
 

@@ -33,9 +33,11 @@ OpusFrameEncoder::~OpusFrameEncoder() {
     }
 }
 
-void OpusFrameEncoder::EncodeFrame(const int16_t* frame, int samples, AudioQueue& queue) {
-    // Init() not called/failed, bad frame, or a buffer shorter than one frame.
-    if (!m_encoder || !frame || samples < kFrameSamples) return;
+void OpusFrameEncoder::EncodeFrame(const int16_t* frame, AudioQueue& queue) {
+    // Init() not called/failed or bad frame pointer. The caller guarantees
+    // kFrameSamples valid samples in `frame` (that is the only size this
+    // encoder ever emits).
+    if (!m_encoder || !frame) return;
     std::vector<uint8_t> packet(kMaxPacket);
     int len = opus_encode(m_encoder, frame, kFrameSamples,
                           packet.data(), kMaxPacket);
@@ -58,11 +60,14 @@ void OpusFrameEncoder::EncodeChunk(const int16_t* pcm, int samples, AudioQueue& 
     // Sanity bound for a single chunk (64 s of 16 kHz audio). Callers pass
     // chunk.size(); this rejects a corrupted/oversized length before insert.
     static constexpr int kMaxChunkSamples = 1 << 20;
-    if (samples > kMaxChunkSamples) return;
+    if (samples > kMaxChunkSamples) {
+        LogE("EncodeChunk rejected oversized chunk: " + std::to_string(samples) + " samples");
+        return;
+    }
     m_buf.insert(m_buf.end(), pcm, pcm + samples);
 
     while ((int)m_buf.size() >= kFrameSamples) {
-        EncodeFrame(m_buf.data(), kFrameSamples, queue);
+        EncodeFrame(m_buf.data(), queue);
         m_buf.erase(m_buf.begin(), m_buf.begin() + kFrameSamples);
     }
 }
@@ -70,7 +75,7 @@ void OpusFrameEncoder::EncodeChunk(const int16_t* pcm, int samples, AudioQueue& 
 void OpusFrameEncoder::Flush(AudioQueue& queue) {
     if (m_buf.empty()) return;
     m_buf.resize(kFrameSamples, 0);
-    EncodeFrame(m_buf.data(), kFrameSamples, queue);
+    EncodeFrame(m_buf.data(), queue);
     m_buf.clear();
 }
 

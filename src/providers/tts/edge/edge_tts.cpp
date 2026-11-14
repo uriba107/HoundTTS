@@ -313,6 +313,9 @@ bool EdgeTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // NaN/Inf would make the int cast in BuildSSML UB and can produce an absurd
+    // prosody rate; normalise like the other cloud providers.
+    if (!std::isfinite(speed)) speed = 1.0;
     std::string voiceName = ResolveVoice(voice, culture, gender);
     LogI("Edge TTS: voice=" + voiceName + " speed=" + std::to_string(speed));
 
@@ -325,7 +328,15 @@ bool EdgeTTS::SynthesizeToQueue(
         // so apply a heuristic: nudge clock by +5 seconds.
         LogI("Edge TTS: first attempt failed (possible 403), retrying with clock skew adjustment");
         EdgeDRM::AdjustClockSkew(5.0);
-        success = TrySynthesize(text, voiceName, speed, volume, queue, got403);
+        try {
+            success = TrySynthesize(text, voiceName, speed, volume, queue, got403);
+        } catch (...) {
+            // Revert the nudge before the exception leaves this function:
+            // repeated exceptional failures must not accumulate skew into a
+            // permanent 403 feedback loop.
+            EdgeDRM::AdjustClockSkew(-5.0);
+            throw;
+        }
         if (!success) {
             // Revert the nudge on failure: repeated unrecoverable failures must
             // not accumulate skew into a permanent 403 feedback loop.

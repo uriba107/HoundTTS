@@ -66,6 +66,15 @@ std::string AzureTranslate::Translate(
         LogE("Azure key not configured ([Azure] key in HoundTTS-credentials.ini)");
         return "";
     }
+    // Both go straight into HTTP header values — reject CR/LF injection.
+    if (Utils::HasControlChars(key)) {
+        LogE("Azure key contains control characters");
+        return "";
+    }
+    if (!region.empty() && Utils::HasControlChars(region)) {
+        LogE("Azure region contains control characters");
+        return "";
+    }
     if (text.empty()) return "";
 
     std::string targetCode = LanguageToCode(language);
