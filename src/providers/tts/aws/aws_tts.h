@@ -12,8 +12,8 @@ namespace HoundTTS {
 // Synthesizes text via Amazon Polly SynthesizeSpeech REST API.
 // Requests raw PCM (16kHz mono 16-bit little-endian); the response body is
 // pushed to PCMQueue as int16 chunks (ownership transfers to the queue).
-// Calls queue.MarkDone() on every normal return path (success or failure);
-// TTSPipeline's dispatch catch-all delivers MarkDone if this throws.
+// Calls queue.MarkDone() exactly once on every return path — including when the
+// synthesis body throws (single owner of completion, same contract as Azure).
 class AwsTTS {
 public:
     // accessKey:  AWS access key ID (never logged)

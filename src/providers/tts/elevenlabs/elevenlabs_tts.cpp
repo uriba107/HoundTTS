@@ -85,6 +85,11 @@ bool ElevenLabsTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Completion backstop for direct (non-pipeline) callers: an internal throw
+    // must still complete the queue. MarkDone is idempotent, so the explicit
+    // failure-path calls below stay as they are.
+    ScopedQueueDone doneGuard(queue);
+
     if (apiKey.empty()) {
         LogE("ElevenLabs API key not configured");
         queue.MarkDone();
@@ -105,6 +110,7 @@ bool ElevenLabsTTS::SynthesizeToQueue(
     if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.7) speed = 0.7;
     if (speed > 1.2) speed = 1.2;
+    volume = Utils::NormalizeVolume(volume);
 
     std::string model = modelId.empty() ? "eleven_turbo_v2" : modelId;
 
@@ -195,9 +201,8 @@ bool ElevenLabsTTS::SynthesizeToQueue(
         // undefined behaviour (alignment + strict aliasing).
         std::vector<int16_t> samples = Utils::PcmBytesToSamples(leftover.data(), sampleBytes);
         if (volume < 1.0) {
-            double vol = std::max(0.0, std::min(1.0, volume));
             for (auto& s : samples)
-                s = static_cast<int16_t>(s * vol);
+                s = static_cast<int16_t>(s * volume);
         }
         queue.Push(std::move(samples));
 

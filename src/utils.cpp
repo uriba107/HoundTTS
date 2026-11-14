@@ -66,6 +66,26 @@ std::string JsonEscape(const std::string& s) {
     return out;
 }
 
+// XML 1.0 allows only tab, LF and CR below 0x20; every other control
+// character (and DEL) is dropped rather than sent in a malformed SSML document.
+std::string XmlEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if ((uc < 0x20 && c != '\t' && c != '\n' && c != '\r') || uc == 0x7F) continue;
+        switch (c) {
+            case '&':  out += "&amp;";  break;
+            case '<':  out += "&lt;";   break;
+            case '>':  out += "&gt;";   break;
+            case '"':  out += "&quot;"; break;
+            case '\'': out += "&apos;"; break;
+            default:   out += c;        break;
+        }
+    }
+    return out;
+}
+
 std::string JsonDecodeString(const std::string& s, size_t pos, size_t* endPos) {
     std::string out;
     if (pos > s.size()) pos = s.size();

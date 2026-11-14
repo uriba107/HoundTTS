@@ -59,6 +59,12 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         return;
     }
 
+    // Volume is normalised ONCE here (non-finite -> 1.0, clamped to [0,1]) so
+    // every provider and generator downstream gets a valid multiplier. The
+    // providers repeat the clamp at their own entry point only because they are
+    // reachable directly (tests / future callers).
+    const double volume = Utils::NormalizeVolume(req.volume);
+
     // --- PCM cache: check for hit before any work ---
     const bool cacheable = (req.message != "__test_tone__");
     uint64_t cacheKey = 0;
@@ -101,7 +107,7 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
 
     // --- Test tone: bypass provider dispatch entirely (and never cache it) ---
     if (req.message == "__test_tone__") {
-        GenerateTone(queue, nullptr, 2.0, 440.0f, static_cast<float>(req.volume));
+        GenerateTone(queue, nullptr, 2.0, 440.0f, static_cast<float>(volume));
         return;
     }
 
@@ -172,7 +178,6 @@ void TTSPipeline::Produce(const TTSRequest& req, std::shared_ptr<PCMQueue> queue
         // All others: 1.0 = normal multiplier
         speed = (provider == TtsProvider::Sapi) ? 0.0 : 1.0;
     }
-    double volume = req.volume;
 
     // Capture config values
     auto& cfg = ConfigReader::Instance();

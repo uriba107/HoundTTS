@@ -223,7 +223,10 @@ public:
             std::lock_guard<std::mutex> lock(slotMutex_);
             --activeCount_;
         }
-        slotCv_.notify_one();
+        // The wakeup is best-effort and must not throw AFTER the decrement:
+        // SlotGuard::Release() only marks the slot returned once this returns,
+        // so a throw here would make the destructor retry and decrement twice.
+        try { slotCv_.notify_one(); } catch (...) {}
     }
 
     void FreeResult(supertonic_audio_chunk* chunk) {
@@ -271,7 +274,8 @@ static std::vector<int16_t> Resample(const int16_t* in, int inCount,
 
 static void ApplyVolume(std::vector<int16_t>& chunk, double volume) {
     if (volume >= 1.0) return;
-    double vol = std::max(0.0, std::min(1.0, volume));
+    const double vol = Utils::NormalizeVolume(volume);
+    if (vol >= 1.0) return;
     for (auto& s : chunk)
         s = static_cast<int16_t>(s * vol);
 }

@@ -51,6 +51,9 @@ piper_synthesizer* PiperModelPool::Acquire(const std::string& modelPath,
         if (it != pool_.end() && !it->second.empty()) {
             piper_synthesizer* synth = it->second.back();
             it->second.pop_back();
+            // Drop the bucket once drained so the map does not accumulate empty
+            // vectors for every model that was ever used.
+            if (it->second.empty()) pool_.erase(it);
             slotGuard.disarmed = true;
             return synth;
         }
@@ -130,14 +133,20 @@ void PiperModelPool::Release(const std::string& modelPath, piper_synthesizer* sy
     bool stored = false;
     try {
         std::lock_guard<std::mutex> lock(poolMutex_);
-        auto& idle = pool_[modelPath];
-        if (static_cast<int>(idle.size()) < kMaxIdlePerModel) {
-            idle.push_back(synth);
+        // find()/emplace() rather than pool_[modelPath]: the operator[] form
+        // inserts an empty bucket even on the cap-reached path, leaving stale
+        // entries for every model that was ever released at capacity.
+        auto it = pool_.find(modelPath);
+        if (it == pool_.end() ||
+            static_cast<int>(it->second.size()) < kMaxIdlePerModel) {
+            if (it == pool_.end())
+                it = pool_.emplace(modelPath, std::vector<piper_synthesizer*>{}).first;
+            it->second.push_back(synth);
             stored = true;
         }
     } catch (...) {
         // Never leak the handle we failed to store; the guard releases the slot
-        // and the caller (PoolGuard) logs and swallows the exception.
+        // and the caller (SynthGuard) logs and swallows the exception.
         PiperNative::Instance().Free(synth);
         throw;
     }

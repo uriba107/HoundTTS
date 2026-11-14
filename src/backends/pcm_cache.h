@@ -155,9 +155,18 @@ public:
         std::lock_guard<std::mutex> lock(accMutex_);
         if (finalized_.load(std::memory_order_acquire)) return;  // late push after finalize
         if (doneForwarded_.load(std::memory_order_acquire)) return;  // late push after completion
+        // Forward to downstream consumer (downstream handles its own locking).
+        // Roll the accumulator back if the forward throws: a retry (e.g. the
+        // padded queue re-issuing its tail) must not append the same chunk
+        // twice, which would cache duplicate audio.
+        const size_t prevSize = accumulator_.size();
         accumulator_.insert(accumulator_.end(), chunk.begin(), chunk.end());
-        // Forward to downstream consumer (downstream handles its own locking)
-        downstream_->Push(std::move(chunk));
+        try {
+            downstream_->Push(std::move(chunk));
+        } catch (...) {
+            accumulator_.resize(prevSize);
+            throw;
+        }
     }
 
     // Forwards completion to the downstream queue so blocked consumers in

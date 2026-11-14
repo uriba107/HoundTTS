@@ -410,8 +410,13 @@ function HoundTTS.Translate(message, provider_params, callback)
     })
 
     if id == nil then
-        -- Provider validation failed synchronously
-        callback(nil, err or "Failed to start translation")
+        -- Provider validation failed synchronously. Invoke the callback under
+        -- pcall like every polling branch: a throwing callback must not escape
+        -- Translate (and the mission thread) unhandled.
+        local cbOk, cbErr = pcall(callback, nil, err or "Failed to start translation")
+        if not cbOk then
+            env.error("[HoundTTS] Translate: callback error: " .. tostring(cbErr))
+        end
         return
     end
 
@@ -423,8 +428,14 @@ function HoundTTS.Translate(message, provider_params, callback)
         local now = t or timer.getTime()
         local ok, result, pollErr = pcall(_dll.getTranslationResult, id)
         if not ok then
-            env.error("[HoundTTS] Translate: getTranslationResult failed: " .. tostring(result))
-            pcall(callback, nil, tostring(result))
+            local msg = string.format(
+                "[HoundTTS] Translate: getTranslationResult failed for request %s: %s",
+                tostring(id), tostring(result))
+            env.error(msg)
+            local cbOk, cbErr = pcall(callback, nil, msg)
+            if not cbOk then
+                env.error("[HoundTTS] Translate: callback error: " .. tostring(cbErr))
+            end
             return nil   -- stop polling
         end
         if result ~= nil then
@@ -446,7 +457,13 @@ function HoundTTS.Translate(message, provider_params, callback)
         if now - started > TRANSLATE_TIMEOUT then
             env.error(string.format(
                 "[HoundTTS] Translate: timed out after %ds (request id %s)", TRANSLATE_TIMEOUT, tostring(id)))
-            pcall(callback, nil, "translation timed out")
+            -- Best-effort: reclaim the slot if the worker already finished, so a
+            -- timed-out request does not leave the result in s_trResults.
+            pcall(_dll.getTranslationResult, id)
+            local cbOk, cbErr = pcall(callback, nil, "translation timed out")
+            if not cbOk then
+                env.error("[HoundTTS] Translate: callback error: " .. tostring(cbErr))
+            end
             return nil   -- stop polling
         end
         -- Still pending — check again in 0.5s

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <cmath>
+#include <stdexcept>
 #include <objbase.h>
 
 namespace HoundTTS {
@@ -62,8 +64,19 @@ inline std::vector<FreqMod> ParseFreqMods(const std::string& freqs,
 
     for (size_t i = 0; i < freqTokens.size(); ++i) {
         FreqMod fm;
-        try { fm.freqHz = std::stod(freqTokens[i]) * 1000000.0; }
-        catch (...) { fm.freqHz = 251000000.0; }
+        // stod accepts partial input ("123abc") and non-finite values ("nan",
+        // "inf") without throwing. Require the whole token to be consumed and
+        // the result to be finite, or a malformed Lua string would end up in
+        // the UDP packet as a truncated/NaN frequency.
+        try {
+            size_t pos = 0;
+            const double mhz = std::stod(freqTokens[i], &pos);
+            if (pos != freqTokens[i].size() || !std::isfinite(mhz))
+                throw std::invalid_argument("malformed frequency");
+            fm.freqHz = mhz * 1000000.0;
+        } catch (...) {
+            fm.freqHz = 251000000.0;
+        }
 
         int mod = DefaultModulation(fm.freqHz); // infer from frequency if not specified
         if (i < modTokens.size()) {

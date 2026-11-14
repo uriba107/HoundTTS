@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <chrono>
 #include <utility>
+#include <new>
+#include <cmath>
 #include <windows.h>
 
 namespace HoundTTS {
@@ -62,7 +64,22 @@ inline void SpawnDetached(F&& f) {
         // detach() failed: never leave a joinable thread behind. join() itself
         // can throw, and an escaping exception here would hit the joinable
         // thread's destructor -> std::terminate.
-        try { t.join(); } catch (...) {}
+        try {
+            t.join();
+        } catch (...) {
+            // join() failed too: try detach once more.
+            try { t.detach(); } catch (...) {}
+        }
+    }
+    if (t.joinable()) {
+        // Last resort: transfer the still-joinable thread to a heap object we
+        // deliberately leak, so the local destructor cannot call
+        // std::terminate and take the host process down. nothrow-new so the
+        // transfer itself cannot throw; if even that allocation fails there is
+        // no non-terminating option left.
+        // ponytail: leaked by design, unreachable short of a failing OS thread
+        // syscall.
+        (void)new (std::nothrow) std::thread(std::move(t));
     }
 }
 
@@ -103,35 +120,45 @@ public:
         auto q = std::make_shared<LogQueue>();
         q->logPath = path;
         q->alive.store(true);
-        std::atomic_store(&queue_, q);
 
+        // Spawn the writer thread FIRST and publish queue_ only once that
+        // succeeds. Publishing before the spawn would leave every later Emit
+        // enqueuing into a LogQueue with no reader if std::thread throws.
         // Writer thread owns a shared_ptr — state survives even if
         // Logger is destroyed first (DLL unload order).
-        SpawnDetached([q]() {
-            while (q->alive.load()) {
-                std::deque<std::string> batch;
+        try {
+            SpawnDetached([q]() {
+                while (q->alive.load()) {
+                    std::deque<std::string> batch;
+                    {
+                        std::unique_lock<std::mutex> lk(q->mu);
+                        q->cv.wait_for(lk, std::chrono::milliseconds(100),
+                            [&] { return !q->entries.empty() || !q->alive.load(); });
+                        batch.swap(q->entries);
+                    }
+                    if (!batch.empty()) {
+                        std::ofstream f(q->logPath, std::ios::app);
+                        if (f) for (auto& line : batch) f << line;
+                    }
+                }
+                // Final flush after shutdown
+                std::deque<std::string> tail;
                 {
-                    std::unique_lock<std::mutex> lk(q->mu);
-                    q->cv.wait_for(lk, std::chrono::milliseconds(100),
-                        [&] { return !q->entries.empty() || !q->alive.load(); });
-                    batch.swap(q->entries);
+                    std::lock_guard<std::mutex> lk(q->mu);
+                    tail.swap(q->entries);
                 }
-                if (!batch.empty()) {
+                if (!tail.empty()) {
                     std::ofstream f(q->logPath, std::ios::app);
-                    if (f) for (auto& line : batch) f << line;
+                    if (f) for (auto& line : tail) f << line;
                 }
-            }
-            // Final flush after shutdown
-            std::deque<std::string> tail;
-            {
-                std::lock_guard<std::mutex> lk(q->mu);
-                tail.swap(q->entries);
-            }
-            if (!tail.empty()) {
-                std::ofstream f(q->logPath, std::ios::app);
-                if (f) for (auto& line : tail) f << line;
-            }
-        });
+            });
+        } catch (...) {
+            // No writer thread: leave queue_ unpublished so a later Init() can
+            // retry instead of silently black-holing every log line.
+            OutputDebugStringA("[HoundTTS] Logger::Init: writer thread creation failed\n");
+            return;
+        }
+        std::atomic_store(&queue_, q);
     }
 
     void SetLevel(LogLevel level) { level_.store(level); }
@@ -169,19 +196,28 @@ private:
 
     void Emit(const std::string& tag, const std::string& level,
               const std::string& msg) {
-        std::string line = "[" + tag + "] " + level + ": " + msg + "\n";
-        // Lock-free — always visible in DebugView / attached debugger
-        OutputDebugStringA(line.c_str());
-        // Enqueue for file write (fast: only a deque push under lock)
-        auto q = std::atomic_load(&queue_);
-        if (!q) return;
-        {
-            std::lock_guard<std::mutex> lk(q->mu);
-            // Re-check under the lock: ~Logger() clears alive under this mutex.
-            if (!q->alive.load()) return;
-            q->entries.push_back(std::move(line));
+        // Never throws. Logging is called from catch handlers, detached
+        // threads and the Lua C boundary, where an escaping exception is
+        // std::terminate or UB — and would skip whatever cleanup follows. The
+        // message building, the queue lock and the enqueue may all allocate,
+        // so the whole body is one guard: callers must never need their own.
+        try {
+            std::string line = "[" + tag + "] " + level + ": " + msg + "\n";
+            // Lock-free — always visible in DebugView / attached debugger
+            OutputDebugStringA(line.c_str());
+            // Enqueue for file write (fast: only a deque push under lock)
+            auto q = std::atomic_load(&queue_);
+            if (!q) return;
+            {
+                std::lock_guard<std::mutex> lk(q->mu);
+                // Re-check under the lock: ~Logger() clears alive under this mutex.
+                if (!q->alive.load()) return;
+                q->entries.push_back(std::move(line));
+            }
+            q->cv.notify_one();
+        } catch (...) {
+            // Best effort: a log line may never fail the caller.
         }
-        q->cv.notify_one();
     }
 
     std::shared_ptr<LogQueue> queue_;   // published via std::atomic_store (Init)
@@ -199,6 +235,20 @@ std::string GenerateSRSGuid();
 // Handles ", \, \b, \f, \n, \r, \t and every other C0 control character
 // (emitted as \u00XX). Bytes >= 0x20 are copied verbatim (UTF-8 passthrough).
 std::string JsonEscape(const std::string& s);
+
+// Escape XML special characters and drop characters XML 1.0 cannot represent,
+// for interpolating untrusted text into SSML. Shared by every TTS provider that
+// builds an SSML document so the sanitisation policy cannot drift.
+std::string XmlEscape(const std::string& s);
+
+// Clamp a caller-supplied volume multiplier into [0,1]; non-finite -> 1.0.
+// TTSPipeline::Produce normalises once, and providers call it again at their
+// own entry point because they are also reachable directly.
+inline double NormalizeVolume(double v) {
+    if (!std::isfinite(v)) return 1.0;
+    if (v <= 0.0) return 0.0;
+    return v > 1.0 ? 1.0 : v;
+}
 
 // Decode the body of a JSON string literal, starting just after the opening
 // quote at `pos`. Handles all short escapes plus \uXXXX, combining UTF-16

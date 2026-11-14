@@ -18,29 +18,9 @@ static const char* kTag = "HoundTTS/Azure";
 static void LogE(const std::string& msg) { HoundTTS::Logger::Instance().Error(kTag, msg); }
 static void LogI(const std::string& msg) { HoundTTS::Logger::Instance().Info(kTag, msg); }
 
-// Escape XML special characters before interpolating into SSML. Used for both
-// text content and attribute values (voice name, locale); entity references
-// decode back to the original characters in the SSML processor.
-static std::string XmlEscape(const std::string& s)
-{
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        // XML 1.0 allows only tab, LF and CR below 0x20; anything else is a
-        // parse error, so drop it rather than send malformed SSML.
-        if (uc < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
-        switch (c) {
-            case '&':  out += "&amp;";  break;
-            case '<':  out += "&lt;";   break;
-            case '>':  out += "&gt;";   break;
-            case '"':  out += "&quot;"; break;
-            case '\'': out += "&apos;"; break;
-            default:   out += c;        break;
-        }
-    }
-    return out;
-}
+// Escape XML special characters before interpolating into SSML. Utils::XmlEscape
+// is the shared policy (text content and attribute values; entity references
+// decode back to the original characters in the SSML processor).
 
 // Build SSML for Azure TTS
 static std::string BuildSSML(const std::string& text,
@@ -75,10 +55,10 @@ static std::string BuildSSML(const std::string& text,
 
     std::ostringstream ssml;
     const std::string lang = culture.empty() ? "en-US" : culture;
-    ssml << "<speak version='1.0' xml:lang='" << XmlEscape(lang) << "'>"
-         << "<voice name='" << XmlEscape(voiceName) << "'>"
+    ssml << "<speak version='1.0' xml:lang='" << Utils::XmlEscape(lang) << "'>"
+         << "<voice name='" << Utils::XmlEscape(voiceName) << "'>"
          << "<prosody rate='" << rateStr.str() << "'>"
-         << XmlEscape(text)
+         << Utils::XmlEscape(text)
          << "</prosody></voice></speak>";
     return ssml.str();
 }
@@ -178,11 +158,16 @@ static bool Synthesize(
             if (std::memcmp(pcmData + off, "data", 4) == 0) {
                 data = pcmData + off + 8;
                 const size_t remaining = pcmLen - (off + 8);
-                // A size of 0 or one past the buffer means "not back-patched":
-                // use what is actually left rather than reporting no audio.
-                dataLen = (chunkSize > 0 && static_cast<size_t>(chunkSize) <= remaining)
-                              ? static_cast<size_t>(chunkSize)
-                              : remaining;
+                // A size that does not fit the buffer means "not back-patched":
+                // use what is actually left rather than reporting no audio. A
+                // size of exactly 0 is a genuinely empty chunk — taking
+                // `remaining` there would swallow trailing non-PCM chunks.
+                if (chunkSize == 0)
+                    dataLen = 0;
+                else if (static_cast<size_t>(chunkSize) <= remaining)
+                    dataLen = static_cast<size_t>(chunkSize);
+                else
+                    dataLen = remaining;
                 break;
             }
             // Guard the advance: a hostile/corrupt size must not wrap and skip
@@ -203,17 +188,18 @@ static bool Synthesize(
     LogI("Received " + std::to_string(pcmLen) + " bytes of PCM");
 
     std::vector<int16_t> samples = Utils::PcmBytesToSamples(pcmData, pcmLen);
-    if (!samples.empty()) {
-        // Normalise before the branch: NaN would compare false and skip the
-        // scaling entirely, and >1.0 bypasses the clamp below.
-        if (!std::isfinite(volume) || volume > 1.0) volume = 1.0;
-        if (volume < 1.0) {
-            double vol = std::max(0.0, std::min(1.0, volume));
-            for (auto& s : samples)
-                s = static_cast<int16_t>(s * vol);
-        }
-        queue.Push(std::move(samples));
+    if (samples.empty()) {
+        // A success status with no complete sample is a failure, not silence
+        // (odd 'data' length, 1-byte body) — matches Google's size guard.
+        LogE("No PCM samples decoded from response (" + std::to_string(pcmLen) + " bytes)");
+        return false;
     }
+    volume = Utils::NormalizeVolume(volume);
+    if (volume < 1.0) {
+        for (auto& s : samples)
+            s = static_cast<int16_t>(s * volume);
+    }
+    queue.Push(std::move(samples));
     return true;
 }
 

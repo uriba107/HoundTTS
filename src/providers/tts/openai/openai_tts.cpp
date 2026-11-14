@@ -263,6 +263,11 @@ bool OpenAITTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Completion backstop: an internal throw must still complete the queue for
+    // direct (non-pipeline) callers. MarkDone is idempotent, so the explicit
+    // failure-path calls below stay as they are.
+    ScopedQueueDone doneGuard(queue);
+
     if (endpoint.empty()) {
         LogE("OpenAI endpoint not configured (set [OpenAI] endpoint in HoundTTS-credentials.ini)");
         queue.MarkDone();

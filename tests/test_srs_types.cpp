@@ -80,6 +80,19 @@ void RunSrsTypesTests(testing::Context& ctx) {
         CHECK_EQ_INT(ctx, enc[0].encKey, 42);
     }
 
+    CASE(ctx, "ParseFreqMods rejects partial and non-finite frequencies") {
+        // "123abc" / "nan" / "inf" parse without throwing under std::stod but
+        // would put a truncated/NaN value into the UDP packet.
+        for (const char* bad : {"123abc", "nan", "inf", "-inf", "1e999"}) {
+            std::vector<FreqMod> f = ParseFreqMods(bad, "AM");
+            CHECK_EQ_INT(ctx, f.size(), 1);
+            CHECK_NEAR(ctx, f[0].freqHz, 251000000.0, 1e-6);
+        }
+        // A fully consumed finite value still parses normally.
+        std::vector<FreqMod> ok = ParseFreqMods("252.5", "AM");
+        CHECK_NEAR(ctx, ok[0].freqHz, 252500000.0, 1e-6);
+    }
+
     CASE(ctx, "ParseFreqMods applies encrypt/encKey to every entry") {
         std::vector<FreqMod> f = ParseFreqMods("251,252", "AM,AM", true, 42);
         CHECK_EQ_INT(ctx, f.size(), 2);

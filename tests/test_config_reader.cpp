@@ -138,6 +138,29 @@ void RunConfigReaderTests(testing::Context& ctx) {
         CHECK_STR_EQ(ctx, cfg.GetWritedir(), dir.Utf8());
     }
 
+    CASE(ctx, "ConfigReader protects quoted spans and unclosed quotes from comments") {
+        testing::TempDir dir("config-quotes");
+        WriteIni(dir.Path(),
+            "[OpenAI]\n"
+            "# '#' right after a closing quote starts a comment\n"
+            "api_key = \"sk-x\"#note\n"
+            "# ';' outside quotes still starts a comment\n"
+            "endpoint = https://example.com/v1 ; dropped\n"
+            "[Azure]\n"
+            "key = \"unclosed ; # stays\n"
+            "[AWS]\n"
+            "region = eu-west-1 # trailing\n");
+
+        ConfigReader& cfg = ConfigReader::Instance();
+        cfg.Load(dir.Utf8());
+
+        CHECK_STR_EQ(ctx, cfg.GetOpenAIKey(), "sk-x");
+        CHECK_STR_EQ(ctx, cfg.GetOpenAIEndpoint(), "https://example.com/v1");
+        // Unclosed quote protects the remainder of the value.
+        CHECK_STR_EQ(ctx, cfg.GetAzureKey(), "\"unclosed ; # stays");
+        CHECK_STR_EQ(ctx, cfg.GetAwsRegion(), "eu-west-1");
+    }
+
     CASE(ctx, "ConfigReader applies bundled defaults when the INI is missing") {
         testing::TempDir dir("config-defaults");
         ConfigReader& cfg = ConfigReader::Instance();

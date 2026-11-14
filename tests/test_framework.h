@@ -19,7 +19,7 @@ class Context {
 public:
     void Begin(const char* name) {
         std::lock_guard<std::mutex> lock(mutex_);
-        caseName_     = name;
+        caseName_     = name ? name : "(null)";
         caseFailures_ = 0;
     }
 
@@ -39,7 +39,26 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         ++caseFailures_;
         ++checkFailures_;
-        std::printf("  %s:%d: %s\n", file, line, what.c_str());
+        std::printf("  %s:%d: %s\n", file ? file : "(null)", line, what.c_str());
+    }
+
+    // Like Fail, but records that the failure came from an exception escaping
+    // the test body, so the suite-level catch in test_main can tell it has
+    // already been counted and does not inflate the totals with a second entry
+    // for the same incident.
+    void FailUncaught(const char* file, int line, const std::string& what) {
+        Fail(file, line, what);
+        std::lock_guard<std::mutex> lock(mutex_);
+        caseThrew_ = true;
+    }
+
+    // Consumes the FailUncaught flag: true when the escaping exception has
+    // already been recorded (by CaseScope) and must not be counted again.
+    bool ConsumeUncaught() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool threw = caseThrew_;
+        caseThrew_ = false;
+        return threw;
     }
 
     // Prints the tail summary and returns the process exit code.
@@ -57,6 +76,7 @@ private:
     int casesPassed_   = 0;
     int casesFailed_   = 0;
     int checkFailures_ = 0;
+    bool caseThrew_    = false;
 };
 
 // RAII case finalizer: ensures End() runs even if a test body breaks/returns.
@@ -68,7 +88,8 @@ public:
     ~CaseScope() {
         if (std::uncaught_exceptions() > 0) {
             try {
-                ctx_.Fail(__FILE__, __LINE__, "uncaught exception escaped the test case");
+                ctx_.FailUncaught(__FILE__, __LINE__,
+                                  "uncaught exception escaped the test case");
             } catch (...) {}
         }
         ctx_.End();

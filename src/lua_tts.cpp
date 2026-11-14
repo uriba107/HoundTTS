@@ -33,6 +33,18 @@ static HoundTTS::ITTSBackend* MakeBackend(const std::string& transmitter) {
     return new HoundTTS::SRSBackend();
 }
 
+// Logging from a catch handler must never throw: building "msg: what()"
+// allocates, and a throw here would skip the cleanup/completion below or (on
+// the Lua thread) escape the extern "C" entry point. One shared noexcept guard
+// for every handler in this file — same pattern as tts_pipeline.cpp.
+static void LogFail(const char* tag, const char* msg,
+                    const std::exception* e = nullptr) noexcept {
+    try {
+        HoundTTS::Logger::Instance().Error(
+            tag, e ? std::string(msg) + ": " + e->what() : std::string(msg));
+    } catch (...) {}
+}
+
 // ---------------------------------------------------------------------------
 // ExpandFreqs — frequency spread / leakage simulation
 //
@@ -255,19 +267,16 @@ int l_textToSpeech(lua_State* L) {
             } catch (const std::exception& e) {
                 // Nothing may escape a detached thread: guard both the logging
                 // and MarkDone (it allocates and locks).
-                try { HoundTTS::Logger::Instance().Error(
-                    "l_textToSpeech", std::string("pipeline failed: ") + e.what()); } catch (...) {}
+                LogFail("l_textToSpeech", "pipeline failed", &e);
                 try { pcmQueue->MarkDone(); } catch (...) {}
             } catch (...) {
-                try { HoundTTS::Logger::Instance().Error(
-                    "l_textToSpeech", "pipeline failed: unknown exception"); } catch (...) {}
+                LogFail("l_textToSpeech", "pipeline failed: unknown exception");
                 try { pcmQueue->MarkDone(); } catch (...) {}
             }
             try {
                 backendShared->Transmit(pcmQueue, txParams);
             } catch (const std::exception& e) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_textToSpeech", std::string("transmit failed: ") + e.what());
+                LogFail("l_textToSpeech", "transmit failed", &e);
                 // The backend never started consuming: complete the queue, mark
                 // the session dead and deregister it, or it reports alive forever.
                 try {
@@ -280,8 +289,7 @@ int l_textToSpeech(lua_State* L) {
                     // must not escape the detached thread.
                 }
             } catch (...) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_textToSpeech", "transmit failed: unknown exception");
+                LogFail("l_textToSpeech", "transmit failed: unknown exception");
                 try {
                     pcmQueue->MarkDone();
                     session->alive.store(false);
@@ -294,8 +302,7 @@ int l_textToSpeech(lua_State* L) {
             }
         });
     } catch (const std::exception& e) {
-        HoundTTS::Logger::Instance().Error(
-            "l_textToSpeech", std::string("thread creation failed: ") + e.what());
+        LogFail("l_textToSpeech", "thread creation failed", &e);
         HoundTTS::SessionManager::Instance().Remove(sessionId);
         // No thread means no transmission: report failure instead of handing
         // back a session id that is not registered and will never transmit.
@@ -303,8 +310,7 @@ int l_textToSpeech(lua_State* L) {
         lua_pushstring(L, (std::string("thread creation failed: ") + e.what()).c_str());
         return 2;
     } catch (...) {
-        HoundTTS::Logger::Instance().Error(
-            "l_textToSpeech", "thread creation failed: unknown exception");
+        LogFail("l_textToSpeech", "thread creation failed: unknown exception");
         HoundTTS::SessionManager::Instance().Remove(sessionId);
         lua_pushnil(L);
         lua_pushstring(L, "thread creation failed: unknown exception");
@@ -325,11 +331,9 @@ int l_textToSpeech(lua_State* L) {
                 speechTime = static_cast<double>(cached->size()) / 16000.0;
             }
         } catch (const std::exception& e) {
-            HoundTTS::Logger::Instance().Error(
-                "l_textToSpeech", std::string("cache peek failed: ") + e.what());
+            LogFail("l_textToSpeech", "cache peek failed", &e);
         } catch (...) {
-            HoundTTS::Logger::Instance().Error(
-                "l_textToSpeech", "cache peek failed: unknown exception");
+            LogFail("l_textToSpeech", "cache peek failed: unknown exception");
         }
     }
     if (speechTime < 0.0) {
@@ -491,19 +495,16 @@ int l_startNoise(lua_State* L) {
                     try {
                         HoundTTS::TTSPipeline::ProduceNoise(pcmQueue, session, noiseType, seed, volume, duration);
                     } catch (const std::exception& e) {
-                        try { HoundTTS::Logger::Instance().Error(
-                            "l_startNoise", std::string("producer failed: ") + e.what()); } catch (...) {}
+                        LogFail("l_startNoise", "producer failed", &e);
                         try { pcmQueue->MarkDone(); } catch (...) {}
                     } catch (...) {
-                        try { HoundTTS::Logger::Instance().Error(
-                            "l_startNoise", "producer failed: unknown exception"); } catch (...) {}
+                        LogFail("l_startNoise", "producer failed: unknown exception");
                         try { pcmQueue->MarkDone(); } catch (...) {}
                     }
                 });
                 backendShared->Transmit(pcmQueue, txParams);
             } catch (const std::exception& e) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_startNoise", std::string("worker failed: ") + e.what());
+                LogFail("l_startNoise", "worker failed", &e);
                 // Without this the detached producer keeps generating into an
                 // unconsumed queue (unbounded for duration<=0) and the session
                 // stays alive forever.
@@ -517,8 +518,7 @@ int l_startNoise(lua_State* L) {
                     // must not escape the detached thread.
                 }
             } catch (...) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_startNoise", "worker failed: unknown exception");
+                LogFail("l_startNoise", "worker failed: unknown exception");
                 try {
                     session->alive.store(false);
                     pcmQueue->MarkDone();
@@ -531,15 +531,13 @@ int l_startNoise(lua_State* L) {
             }
         });
     } catch (const std::exception& e) {
-        HoundTTS::Logger::Instance().Error(
-            "l_startNoise", std::string("thread creation failed: ") + e.what());
+        LogFail("l_startNoise", "thread creation failed", &e);
         HoundTTS::SessionManager::Instance().Remove(sessionId);
         lua_pushnil(L);
         lua_pushstring(L, (std::string("thread creation failed: ") + e.what()).c_str());
         return 2;
     } catch (...) {
-        HoundTTS::Logger::Instance().Error(
-            "l_startNoise", "thread creation failed: unknown exception");
+        LogFail("l_startNoise", "thread creation failed: unknown exception");
         HoundTTS::SessionManager::Instance().Remove(sessionId);
         lua_pushnil(L);
         lua_pushstring(L, "thread creation failed: unknown exception");
@@ -631,19 +629,16 @@ int l_startTone(lua_State* L) {
                     try {
                         HoundTTS::TTSPipeline::ProduceTone(pcmQueue, session, duration, freqHz, volume);
                     } catch (const std::exception& e) {
-                        try { HoundTTS::Logger::Instance().Error(
-                            "l_startTone", std::string("producer failed: ") + e.what()); } catch (...) {}
+                        LogFail("l_startTone", "producer failed", &e);
                         try { pcmQueue->MarkDone(); } catch (...) {}
                     } catch (...) {
-                        try { HoundTTS::Logger::Instance().Error(
-                            "l_startTone", "producer failed: unknown exception"); } catch (...) {}
+                        LogFail("l_startTone", "producer failed: unknown exception");
                         try { pcmQueue->MarkDone(); } catch (...) {}
                     }
                 });
                 backendShared->Transmit(pcmQueue, txParams);
             } catch (const std::exception& e) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_startTone", std::string("worker failed: ") + e.what());
+                LogFail("l_startTone", "worker failed", &e);
                 // Stop the producer and complete the queue: Transmit never ran,
                 // so nothing else will consume or free the generated PCM.
                 try {
@@ -656,8 +651,7 @@ int l_startTone(lua_State* L) {
                     // must not escape the detached thread.
                 }
             } catch (...) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_startTone", "worker failed: unknown exception");
+                LogFail("l_startTone", "worker failed: unknown exception");
                 try {
                     session->alive.store(false);
                     pcmQueue->MarkDone();
@@ -670,15 +664,13 @@ int l_startTone(lua_State* L) {
             }
         });
     } catch (const std::exception& e) {
-        HoundTTS::Logger::Instance().Error(
-            "l_startTone", std::string("thread creation failed: ") + e.what());
+        LogFail("l_startTone", "thread creation failed", &e);
         HoundTTS::SessionManager::Instance().Remove(sessionId);
         lua_pushnil(L);
         lua_pushstring(L, (std::string("thread creation failed: ") + e.what()).c_str());
         return 2;
     } catch (...) {
-        HoundTTS::Logger::Instance().Error(
-            "l_startTone", "thread creation failed: unknown exception");
+        LogFail("l_startTone", "thread creation failed: unknown exception");
         HoundTTS::SessionManager::Instance().Remove(sessionId);
         lua_pushnil(L);
         lua_pushstring(L, "thread creation failed: unknown exception");
@@ -722,9 +714,9 @@ int l_updateSession(lua_State* L) {
         std::lock_guard<std::mutex> lk(session->backendMutex);
         posData = std::static_pointer_cast<HoundTTS::SRSPositionData>(session->backendData);
     } catch (const std::exception& e) {
-        try { log.Error("updateSession", std::string("backend data lock failed: ") + e.what()); } catch (...) {}
+        LogFail("l_updateSession", "backend data lock failed", &e);
     } catch (...) {
-        try { log.Error("updateSession", "backend data lock failed: unknown exception"); } catch (...) {}
+        LogFail("l_updateSession", "backend data lock failed: unknown exception");
     }
     if (posData) {
         bool hasPos = false;
@@ -762,11 +754,9 @@ int l_updateSession(lua_State* L) {
                 if (posData->sendPositionSync)
                     posData->sendPositionSync();
             } catch (const std::exception& e) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_updateSession", std::string("position sync failed: ") + e.what());
+                LogFail("l_updateSession", "position sync failed", &e);
             } catch (...) {
-                HoundTTS::Logger::Instance().Error(
-                    "l_updateSession", "position sync failed: unknown exception");
+                LogFail("l_updateSession", "position sync failed: unknown exception");
             }
         }
     }

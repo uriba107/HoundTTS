@@ -143,7 +143,14 @@ static size_t PcmDataOffset(const void* data, size_t byteCount, size_t& pcmBytes
             pcmBytes = (chunkSize > 0 && chunkSize <= remaining) ? chunkSize : remaining;
             return payload;
         }
-        pos = payload + chunkSize + (chunkSize & 1u);  // odd-sized chunks are padded
+        const size_t advance = static_cast<size_t>(chunkSize) + (chunkSize & 1u);
+        if (advance > byteCount - payload) {
+            // Malformed/truncated chunk: stop parsing rather than wrap `pos` or
+            // skip past the buffer (a hostile size must not become an OOB read).
+            pcmBytes = 0;
+            return 0;
+        }
+        pos = payload + advance;
     }
     pcmBytes = 0;  // RIFF container without a data chunk: emit no audio
     return 0;      // keep the source pointer in bounds (zero bytes are read anyway)

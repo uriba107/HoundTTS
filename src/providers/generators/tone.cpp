@@ -91,13 +91,20 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
             chunk[i] = static_cast<int16_t>(val * 32767.0f * vol);
         }
 
-        samplesGenerated += static_cast<int>(chunk.size());
-        queue->Push(std::move(chunk));
+        // A killed in-flight chunk may have been trimmed to empty. Pushing it
+        // would inject the PTT lead-in silence for audio that does not exist
+        // (and a downstream MarkDone would add the tail), so skip it — same
+        // guard as noise.cpp.
+        if (!chunk.empty()) {
+            samplesGenerated += static_cast<int>(chunk.size());
+            queue->Push(std::move(chunk));
 
-        // Pace at ~real-time to prevent unbounded audio buffering downstream.
-        int paceMs = std::max(0, chunkSize * 1000 / kSampleRate - 200);
-        for (int waited = 0; waited < paceMs && isAlive(); waited += 100) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Pace at ~real-time to prevent unbounded audio buffering
+            // downstream, based on what was actually queued.
+            int paceMs = std::max(0, static_cast<int>(chunkSize) * 1000 / kSampleRate - 200);
+            for (int waited = 0; waited < paceMs && isAlive(); waited += 100) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
     }
     // MarkDone is delivered by doneGuard on scope exit.

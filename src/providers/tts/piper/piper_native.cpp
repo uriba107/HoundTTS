@@ -16,22 +16,51 @@ bool PiperNative::Load(const std::string& dllDir) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (loaded_) return available_;
 
-    // Clear loaded_ if this attempt exits via an exception so a later call can
-    // retry; keep it set on permanent outcomes (success / permanent failure).
-    struct LoadGuard {
-        bool& loaded;
-        bool keep = false;
-        ~LoadGuard() { if (!keep) loaded = false; }
-    } loadGuard{loaded_};
-
-    loaded_ = true;
-
     std::string dllPath = dllDir;
     if (!dllPath.empty() && dllPath.back() != '\\' && dllPath.back() != '/')
         dllPath += '\\';
     dllPath += "piper.dll";
 
+    // Narrow->wide conversions can allocate, so do them BEFORE any process-wide
+    // state changes or module loads below.
+    const std::wstring wDllPath = Utils::Utf8ToWide(dllPath);
+    const std::wstring wDllDir  = Utils::Utf8ToWide(dllDir);
     LogI("Loading piper.dll from: " + dllPath);
+
+    // Clear loaded_ if this attempt exits via an exception so a later call can
+    // retry; keep it set on permanent outcomes (success / permanent failure).
+    //
+    // On a mid-load exception the module is deliberately left loaded (a
+    // concurrent caller may already hold a snapshotted export pointer, and
+    // FreeLibrary would invalidate it), but every export is dropped and the
+    // failure is made permanent: retrying cannot leak a second module handle.
+    struct LoadGuard {
+        bool& loaded;
+        bool& available;
+        PFN_piper_create& fnCreate;
+        PFN_piper_free& fnFree;
+        PFN_piper_default_synthesize_options& fnDefaults;
+        PFN_piper_synthesize_start& fnStart;
+        PFN_piper_synthesize_next& fnNext;
+        bool keep = false;
+        // LoadLibrary failed: nothing was loaded, so a later corrected path may
+        // retry. Any other failure (module loaded, exports half-resolved) is
+        // made permanent to avoid leaking/duplicating the module handle.
+        bool retryable = false;
+        ~LoadGuard() {
+            if (keep) return;
+            fnCreate   = nullptr;
+            fnFree     = nullptr;
+            fnDefaults = nullptr;
+            fnStart    = nullptr;
+            fnNext     = nullptr;
+            available  = false;
+            loaded     = !retryable;
+        }
+    } loadGuard{loaded_, available_,
+                 fn_create_, fn_free_, fn_defaults_, fn_start_, fn_next_};
+
+    loaded_ = true;
 
     // Temporarily set the process-wide DLL search directory so that
     // onnxruntime.dll's internal LoadLibrary calls (for execution-provider
@@ -41,20 +70,25 @@ bool PiperNative::Load(const std::string& dllDir) {
     // LoadLibrary calls inside onnxruntime use the default search order
     // and fail with GLE 1114 (ERROR_DLL_INIT_FAILED) when a provider DLL
     // cannot be located.
-    std::wstring wDllDir = Utils::Utf8ToWide(dllDir);
-    wchar_t prevDllDir[MAX_PATH] = {};
-    DWORD prevLen = GetDllDirectoryW(MAX_PATH, prevDllDir);
+    std::wstring prevDllDir;
+    {
+        wchar_t prevBuf[MAX_PATH] = {};
+        if (GetDllDirectoryW(MAX_PATH, prevBuf) > 0) prevDllDir = prevBuf;
+    }
+    // Restore the process-wide directory on every exit path, including a throw.
+    struct DllDirGuard {
+        const std::wstring& prev;
+        ~DllDirGuard() { SetDllDirectoryW(prev.empty() ? nullptr : prev.c_str()); }
+    } dllDirGuard{prevDllDir};
     SetDllDirectoryW(wDllDir.c_str());
 
-    hDll_ = LoadLibraryW(Utils::Utf8ToWide(dllPath).c_str());
+    hDll_ = LoadLibraryW(wDllPath.c_str());
     DWORD loadErr = GetLastError();
-
-    // Restore previous DLL directory (nullptr resets to default behaviour).
-    SetDllDirectoryW(prevLen > 0 ? prevDllDir : nullptr);
 
     if (!hDll_) {
         LogE("LoadLibrary failed for piper.dll (GLE=" + std::to_string(loadErr) + ") — piper.exe subprocess fallback active");
-        return false;   // LoadGuard clears loaded_, allowing a retry later
+        loadGuard.retryable = true;   // nothing loaded: a corrected path may retry
+        return false;
     }
 
     fn_create_   = (PFN_piper_create)                    GetProcAddress(hDll_, "piper_create");

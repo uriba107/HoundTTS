@@ -120,7 +120,8 @@ static std::vector<int16_t> Resample(const int16_t* in, int inCount,
 
 static void ApplyVolume(std::vector<int16_t>& chunk, double volume) {
     if (volume >= 1.0) return;
-    double vol = std::max(0.0, std::min(1.0, volume));
+    const double vol = Utils::NormalizeVolume(volume);
+    if (vol >= 1.0) return;
     for (auto& s : chunk)
         s = static_cast<int16_t>(s * vol);
 }
@@ -196,50 +197,48 @@ bool PiperTTS::SynthesizeViaNative(
     auto& pool   = PiperModelPool::Instance();
     auto& native = PiperNative::Instance();
 
-    // Owned copy taken BEFORE any handle is acquired: after Acquire() the
-    // release guard must exist, so nothing that can throw (this copy) may run
-    // in between.
+    // Owned copy taken BEFORE any handle is acquired: the guard below stores it,
+    // so nothing that can throw (this copy) runs between Acquire() and guarding.
     std::string modelPathOwned = modelPath;
 
-    piper_synthesizer* synth = pool.Acquire(modelPath, espeakDataPath);
+    // Acquire() itself can throw (piper_create / allocation). No guard exists
+    // yet at that point, so complete the queue here or a downstream consumer
+    // blocks in Pop() forever.
+    piper_synthesizer* synth = nullptr;
+    try {
+        synth = pool.Acquire(modelPath, espeakDataPath);
+    } catch (...) {
+        try { queue.MarkDone(); } catch (...) {}
+        throw;
+    }
     if (!synth) {
         LogE("Failed to acquire synthesizer for model: " + modelPath);
         queue.MarkDone();
         return false;
     }
 
-    // Return the synthesizer on every exit path — including a throw from
-    // queue.Push() or a PCM allocation — so the active slot is never leaked.
-    // Built from an already-owned string, so its construction cannot throw
-    // between taking the handle and guarding it.
-    struct PoolGuard {
+    // ONE guard owns the handle AND the completion signal, built immediately
+    // after Acquire() from already-owned state: an exception between taking the
+    // handle and guarding it can no longer leak the pooled synthesizer, and the
+    // destructor always signals completion before the handle returns to the pool.
+    struct SynthGuard {
         PiperModelPool& pool;
         std::string modelPath;   // owned copy: self-contained guard
         piper_synthesizer* synth;
+        PCMQueue& q;
         // Runs during stack unwinding, so it must not throw: Release takes a
         // lock and allocates, either of which could otherwise call terminate.
-        ~PoolGuard() noexcept {
+        ~SynthGuard() noexcept {
+            try { q.MarkDone(); } catch (...) {}
             try {
                 pool.Release(modelPath, synth);
             } catch (const std::exception& e) {
-                try { LogE(std::string("PoolGuard::Release failed: ") + e.what()); } catch (...) {}
+                try { LogE(std::string("SynthGuard::Release failed: ") + e.what()); } catch (...) {}
             } catch (...) {
-                try { LogE("PoolGuard::Release failed: unknown exception"); } catch (...) {}
+                try { LogE("SynthGuard::Release failed: unknown exception"); } catch (...) {}
             }
         }
-    } guard{pool, std::move(modelPathOwned), synth};
-
-    // Declared AFTER the guard, so it is destroyed FIRST: completion is
-    // signalled before the synthesizer goes back to the pool, never after.
-    // Completion is signalled even if Resample/Push/allocation throws: a
-    // downstream consumer would otherwise block in PCMQueue::Pop() forever.
-    // MarkDone is idempotent, so the explicit call on the normal path is safe.
-    struct DoneGuard {
-        PCMQueue& q;
-        ~DoneGuard() noexcept {
-            try { q.MarkDone(); } catch (...) {}
-        }
-    } doneGuard{queue};
+    } guard{pool, std::move(modelPathOwned), synth, queue};
 
     // Resolve speaker ID (numeric or named, with bounds check and name fallback)
     std::string modelJson = ReadModelJson(modelPath);
@@ -359,7 +358,9 @@ bool PiperTTS::SynthesizeViaSubprocess(
 
     PROCESS_INFORMATION pi{};
     // Close whatever is still open on every exit path. Explicit closes below
-    // null the handle so this never double-closes.
+    // null the handle so this never double-closes. A piper.exe still running
+    // when this fires (early return, throw) is terminated first: closing its
+    // handles alone would orphan it.
     struct HandleCloser {
         HANDLE& stdinRd; HANDLE& stdinWr; HANDLE& stdoutRd; HANDLE& stdoutWr;
         PROCESS_INFORMATION& pi;
@@ -368,7 +369,15 @@ bool PiperTTS::SynthesizeViaSubprocess(
             if (stdinWr)  CloseHandle(stdinWr);
             if (stdoutRd) CloseHandle(stdoutRd);
             if (stdoutWr) CloseHandle(stdoutWr);
-            if (pi.hProcess) CloseHandle(pi.hProcess);
+            if (pi.hProcess) {
+                DWORD exitCode = 0;
+                if (::GetExitCodeProcess(pi.hProcess, &exitCode) &&
+                    exitCode == STILL_ACTIVE) {
+                    ::TerminateProcess(pi.hProcess, 1);
+                    ::WaitForSingleObject(pi.hProcess, 1000);
+                }
+                CloseHandle(pi.hProcess);
+            }
             if (pi.hThread)  CloseHandle(pi.hThread);
         }
     } handleCloser{hStdinRd, hStdinWr, hStdoutRd, hStdoutWr, pi};

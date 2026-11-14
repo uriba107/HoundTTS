@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 
+#include <cstdio>
 #include <atomic>
 #include <filesystem>
 #include <stdexcept>
@@ -19,6 +20,16 @@ namespace testing {
 class TempDir {
 public:
     explicit TempDir(const std::string& leaf) {
+        // `leaf` is interpolated into a path that is later removed recursively:
+        // a separator or ".." would operate outside the temp root. Callers pass
+        // literals today, but the failure mode is destructive, so validate.
+        const bool badLeaf =
+            leaf.empty() || leaf == "." || leaf == ".." ||
+            leaf.find_first_of("/\\") != std::string::npos ||
+            leaf.find("..") != std::string::npos;
+        if (badLeaf)
+            throw std::runtime_error("TempDir: invalid leaf name: " + leaf);
+
         static std::atomic<int> counter{0};
         path_ = std::filesystem::temp_directory_path() /
                 ("houndtts-test-" + std::to_string(::GetCurrentProcessId()) + "-" +
@@ -35,6 +46,12 @@ public:
     ~TempDir() {
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);
+        if (ec) {
+            // A destructor cannot throw; at least leave a trace so a leftover
+            // scratch directory is diagnosable.
+            std::fprintf(stderr, "TempDir: remove_all(%s) failed: %s\n",
+                         path_.string().c_str(), ec.message().c_str());
+        }
     }
 
     TempDir(const TempDir&) = delete;

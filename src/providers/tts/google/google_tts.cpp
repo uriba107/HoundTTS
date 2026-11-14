@@ -62,6 +62,11 @@ bool GoogleTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Completion backstop for direct (non-pipeline) callers: an internal throw
+    // must still complete the queue. MarkDone is idempotent, so the explicit
+    // failure-path calls below stay as they are.
+    ScopedQueueDone doneGuard(queue);
+
     if (credsFile.empty()) {
         LogE("Google credentials file not configured in HoundTTS-credentials.ini");
         queue.MarkDone();
@@ -89,6 +94,7 @@ bool GoogleTTS::SynthesizeToQueue(
     if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.25) speed = 0.25;
     if (speed > 4.0)  speed = 4.0;
+    volume = Utils::NormalizeVolume(volume);
 
     // Match AWS/Azure: skip leading whitespace and require a tag boundary.
     size_t ssmlOff = 0;
@@ -160,9 +166,8 @@ bool GoogleTTS::SynthesizeToQueue(
     // undefined behaviour (alignment + strict aliasing).
     std::vector<int16_t> samples = Utils::PcmBytesToSamples(pcmRaw.data(), pcmRaw.size());
     if (volume < 1.0) {
-        double vol = std::max(0.0, std::min(1.0, volume));
         for (auto& s : samples)
-            s = static_cast<int16_t>(s * vol);
+            s = static_cast<int16_t>(s * volume);
     }
     queue.Push(std::move(samples));
     queue.MarkDone();

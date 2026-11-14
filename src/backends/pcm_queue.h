@@ -82,6 +82,27 @@ private:
 constexpr double PTT_PAD_SEC     = 0.2;
 constexpr int    PTT_PAD_SAMPLES = static_cast<int>(PTT_PAD_SEC * 16000);
 
+// RAII completion guarantee: MarkDone() on every exit path, including an
+// exception thrown mid-synthesis. MarkDone is idempotent on every queue in the
+// Padded -> Caching -> PCM chain, so a provider that also calls it explicitly
+// (failure paths) does not duplicate anything.
+class ScopedQueueDone {
+public:
+    explicit ScopedQueueDone(PCMQueue& queue) noexcept : queue_(&queue) {}
+    ~ScopedQueueDone() noexcept {
+        try {
+            if (queue_) queue_->MarkDone();
+        } catch (...) {
+            // A throwing destructor would call std::terminate.
+        }
+    }
+    ScopedQueueDone(const ScopedQueueDone&) = delete;
+    ScopedQueueDone& operator=(const ScopedQueueDone&) = delete;
+
+private:
+    PCMQueue* queue_;
+};
+
 // ---------------------------------------------------------------------------
 // PaddedPCMQueue — wrapper that injects silence before and after the real
 // audio to simulate a PTT lead-in / tail.  The downstream queue (and any

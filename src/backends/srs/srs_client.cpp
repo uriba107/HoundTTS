@@ -92,12 +92,16 @@ static const int kFixedSize     = 57;  // UnitID(4) + PacketID(8) + Hops(1) + Re
 
 // ---------------------------------------------------------------------------
 // Timer callback state (passed via dwUser as pointer)
+//
+// Self-contained: it owns the queue, a copy of the frequency list and a copy of
+// the GUID, so the deliberately leaked instance (see StreamCleanup) can never
+// dangle on objects owned by a worker thread that already finished.
 // ---------------------------------------------------------------------------
 struct TimerState {
-    AudioQueue*                  queue;
-    const std::vector<FreqMod>*  freqs;
+    std::shared_ptr<AudioQueue>  queue;
+    std::vector<FreqMod>         freqs;
     uint32_t                     unitId;
-    const std::string*           guid;
+    std::string                  guid;
     SOCKET                       udpSock;
     sockaddr_in                  udpAddr;
     std::atomic<uint64_t>        packetId{0};
@@ -140,8 +144,8 @@ static void CALLBACK TimerProc(UINT, UINT, DWORD_PTR dwUser, DWORD_PTR, DWORD_PT
         }
 
         auto packet = SRSClient::BuildVoicePacket(
-            frame, *s->freqs, s->unitId,
-            s->packetId.fetch_add(1), *s->guid);
+            frame, s->freqs, s->unitId,
+            s->packetId.fetch_add(1), s->guid);
         if (packet.empty()) return;  // inputs outgrew the uint16 length fields
 
         sendto(s->udpSock,
@@ -366,11 +370,15 @@ void SRSClient::SendPing() {
            sizeof(addr));
 }
 
-void SRSClient::StreamFromQueue(AudioQueue& queue,
+void SRSClient::StreamFromQueue(std::shared_ptr<AudioQueue> queue,
                                  const std::vector<FreqMod>& freqs,
                                  uint32_t unitId,
                                  std::shared_ptr<HoundTTS::Session> session,
                                  std::shared_ptr<SRSPositionData> posData) {
+    if (!queue) {
+        LogE("StreamFromQueue called with a null queue; aborting");
+        return;
+    }
     // Build a silence Opus frame (used when queue is momentarily empty)
     // A single Opus frame of silence is just encoding 640 zero samples.
     // We pre-encode it here using a temporary encoder.
@@ -395,7 +403,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     sockaddr_in udpAddr{};
     if (!ResolveAddress(m_host, m_port, udpAddr)) {
         LogE("StreamFromQueue resolve failed host=" + m_host + " port=" + std::to_string(m_port));
-        queue.MarkDone();
+        queue->MarkDone();
         return;
     }
 
@@ -411,7 +419,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     // Also honour the session kill signal: an aborted session must not sit here
     // for the full deadline waiting for frames that will never arrive.
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue.Size() < 5 && !queue.IsDone() &&
+    while (queue->Size() < 5 && !queue->IsDone() &&
            !(session && !session->alive.load())) {
         if (std::chrono::steady_clock::now() > deadline) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -420,12 +428,14 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     // Set up timer state. Heap-allocated so a callback that outlives the drain
     // wait below cannot be left pointing at a destroyed object: on timeout the
     // state is deliberately leaked instead of freed under a running callback.
+    // The state owns everything the callback touches (queue via shared_ptr,
+    // copies of freqs/guid), so the leak cannot reference freed memory.
     auto stateOwner = std::make_unique<TimerState>();
     TimerState& state = *stateOwner;
-    state.queue        = &queue;
-    state.freqs        = &freqs;
+    state.queue        = queue;
+    state.freqs        = freqs;
     state.unitId       = unitId;
-    state.guid         = &m_guid;
+    state.guid         = m_guid;
     state.udpSock      = m_udp;
     state.udpAddr      = udpAddr;
     state.silenceFrame = silenceFrame;
@@ -457,18 +467,26 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
                                 (now - posData->lastSentAt >= std::chrono::seconds(175));
             if (!posChanged && !heartbeatDue) return;
 
+            // Retry a failed update at most once per second. A failed send is
+            // not recorded as delivered (below), so it stays eligible; without
+            // this throttle the 10 ms stream loop would resend and log on every
+            // iteration while the server is unreachable.
+            if (now - posData->lastAttemptAt < std::chrono::seconds(1)) return;
+            posData->lastAttemptAt = now;
+
             std::string metaJson = BuildClientMetadataJson(cap_coalition, cap_name, lat, lon, alt);
             std::ostringstream msg;
             msg << R"({"Version":")" << kSRSVersion
                 << R"(","MsgType":0,"Client":)" << metaJson << "}";
-            // Record the attempt before sending: a failed TCP send must not leave
-            // heartbeatDue/posChanged true, or the 10 ms loop below retries it
-            // (and logs) every iteration until the next successful send.
-            posData->lastSentLat = lat;
-            posData->lastSentLon = lon;
-            posData->lastSentAlt = alt;
-            posData->lastSentAt  = now;
-            SendTCP(msg.str());
+            // Record the position only after a successful send: a failed TCP
+            // send must stay eligible for retry instead of restarting the 175 s
+            // heartbeat window as if it had been delivered.
+            if (SendTCP(msg.str())) {
+                posData->lastSentLat = lat;
+                posData->lastSentLon = lon;
+                posData->lastSentAlt = alt;
+                posData->lastSentAt  = now;
+            }
         };
     }
 
@@ -524,7 +542,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         // Abort cleanly instead of spinning forever in the wait loop below.
         LogE("timeSetEvent() failed — aborting SRS stream");
         state.finished.store(true);
-        queue.MarkDone();
+        queue->MarkDone();
         return;
     }
 

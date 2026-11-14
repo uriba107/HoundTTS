@@ -46,11 +46,15 @@ int main() {
         try {
             suite.run(ctx);
         } catch (const std::exception& e) {
-            ctx.Fail(__FILE__, __LINE__,
-                     std::string("suite ") + suite.name + " threw: " + e.what());
+            // CaseScope already recorded an exception that escaped a test body;
+            // only count a suite-level throw that has not been reported yet.
+            if (!ctx.ConsumeUncaught())
+                ctx.Fail(__FILE__, __LINE__,
+                         std::string("suite ") + suite.name + " threw: " + e.what());
         } catch (...) {
-            ctx.Fail(__FILE__, __LINE__,
-                     std::string("suite ") + suite.name + " threw an unknown exception");
+            if (!ctx.ConsumeUncaught())
+                ctx.Fail(__FILE__, __LINE__,
+                         std::string("suite ") + suite.name + " threw an unknown exception");
         }
     }
 

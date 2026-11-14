@@ -55,7 +55,11 @@ static void RunTranslateWorker(std::shared_ptr<TranslateResult> slot, Work work)
                 if (translated.empty())
                     error = "Translation failed (check Logs\\HoundTTS.log for details)";
             } catch (const std::exception& e) {
-                error = std::string("Translation exception: ") + e.what();
+                // Building the message allocates. A throw here would skip the
+                // publish below and leave the caller polling forever, so the
+                // description is best-effort and LogE itself never throws.
+                try { error = std::string("Translation exception: ") + e.what(); }
+                catch (...) { error = "Translation exception"; }
                 LogE(error);
             } catch (...) {
                 error = "Unknown translation exception";

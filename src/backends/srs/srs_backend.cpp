@@ -63,18 +63,20 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
 
     SpawnDetached([pcm, host, port, freqs, coalition, name, unitId,
                  session, posData, eamPassword]() {
-        // Opus-encode PCM as it arrives from the pipeline
-        auto opusQueue = std::make_shared<AudioQueue>();
+        // Declared before the try and allocated inside it: a throwing
+        // allocation must still run cleanup() (session teardown), so cleanup
+        // tolerates null pointers instead of being defined after them.
+        std::shared_ptr<AudioQueue> opusQueue;
         // Set by cleanup() so the encoder thread stops consuming PCM when the
         // stream aborts early (e.g. connect/handshake failure). Without it the
         // encoder keeps encoding into a queue nobody drains until the producer
         // finishes, which can grow unbounded.
-        auto stopEncoder = std::make_shared<std::atomic<bool>>(false);
+        std::shared_ptr<std::atomic<bool>> stopEncoder;
         // Set by the encoder thread once it has stopped consuming PCM and
         // signalled opusQueue. cleanup() waits on it (bounded) before marking
         // the queue done itself: the encoder may still be inside Pop() (500 ms
         // timeout) and could otherwise Push a frame after completion.
-        auto encoderDone = std::make_shared<std::atomic<bool>>(false);
+        std::shared_ptr<std::atomic<bool>> encoderDone;
 
         // Shared teardown: clears SRS position-sync callback, drains the opus
         // queue, detaches backend data, flags the session dead, and removes it
@@ -84,13 +86,16 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
             // Called from catch handlers too: nothing may escape the handler,
             // or std::terminate takes DCS down.
             try {
-                stopEncoder->store(true);
+                if (stopEncoder) stopEncoder->store(true);
                 // Bounded wait (the encoder's Pop timeout is 500 ms): wait for
                 // it to observe stopEncoder and finish before the queue is
                 // marked done, so Push-after-MarkDone cannot happen.
-                for (int i = 0; i < 400 && !encoderDone->load(); ++i)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                opusQueue->MarkDone();
+                if (encoderDone) {
+                    for (int i = 0; i < 400 &&
+                                    !encoderDone->load(std::memory_order_acquire); ++i)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                if (opusQueue) opusQueue->MarkDone();
                 if (posData) { std::lock_guard<std::mutex> lk(posData->syncMutex); posData->sendPositionSync = nullptr; }
                 if (session) {
                     session->alive.store(false);
@@ -108,6 +113,10 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
         // DCS, skipping cleanup() (leaving the session registered). Catch it,
         // log, and still run cleanup.
         try {
+            opusQueue   = std::make_shared<AudioQueue>();
+            stopEncoder = std::make_shared<std::atomic<bool>>(false);
+            encoderDone = std::make_shared<std::atomic<bool>>(false);
+
             SpawnDetached([pcm, opusQueue, stopEncoder, encoderDone]() {
                 try {
                     OpusFrameEncoder encoder;
@@ -151,7 +160,7 @@ bool SRSBackend::Transmit(std::shared_ptr<PCMQueue> pcm,
                 return;
             }
             LogI("Streaming to SRS name=" + name);
-            client.StreamFromQueue(*opusQueue, freqs, unitId, session, posData);
+            client.StreamFromQueue(opusQueue, freqs, unitId, session, posData);
             client.Disconnect();
             LogI("Stream done name=" + name);
 

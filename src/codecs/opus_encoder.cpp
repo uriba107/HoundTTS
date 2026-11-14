@@ -10,19 +10,19 @@ namespace HoundTTS {
 static void LogE(const std::string& msg) { Logger::Instance().Error("OpusFrameEncoder", msg); }
 
 bool OpusFrameEncoder::Init() {
-    // Destroy any encoder from a previous Init(): overwriting the raw pointer
-    // would leak the libopus state. Single-threaded by contract — one encoder
-    // instance is owned by its Opus worker thread.
-    if (m_encoder) {
-        opus_encoder_destroy(m_encoder);
-        m_encoder = nullptr;
-    }
-    // Clear unconditionally: a failed re-init must not leave stale samples to
-    // be emitted by a later successful Init().
-    m_buf.clear();
+    // Create the new encoder FIRST and swap only on success: a failed re-init
+    // must leave a working encoder (and its buffered audio) untouched.
     int err = 0;
-    m_encoder = opus_encoder_create(kSampleRate, kChannels, OPUS_APPLICATION_VOIP, &err);
-    if (err != OPUS_OK || !m_encoder) return false;
+    OpusEncoder* created = opus_encoder_create(kSampleRate, kChannels,
+                                                OPUS_APPLICATION_VOIP, &err);
+    if (err != OPUS_OK || !created) {
+        if (created) opus_encoder_destroy(created);
+        return false;
+    }
+    if (m_encoder) opus_encoder_destroy(m_encoder);
+    m_encoder = created;
+    // Clear: a successful re-init must not emit stale samples from before.
+    m_buf.clear();
     return true;
 }
 
@@ -44,6 +44,12 @@ void OpusFrameEncoder::EncodeFrame(const int16_t* frame, AudioQueue& queue) {
     if (len < 0) {
         // Codec error: the frame is lost, but surface it instead of dropping it silently.
         LogE("opus_encode failed: " + std::to_string(len));
+        return;
+    }
+    if (len > kMaxPacket) {
+        // Defensive: libopus never exceeds the requested capacity, but an
+        // oversized value must not resize the packet past the encoded region.
+        LogE("opus_encode returned oversized packet: " + std::to_string(len));
         return;
     }
     if (len > 0) {
@@ -73,8 +79,19 @@ void OpusFrameEncoder::EncodeChunk(const int16_t* pcm, int samples, AudioQueue& 
 }
 
 void OpusFrameEncoder::Flush(AudioQueue& queue) {
+    // No encoder means nothing can be produced; drop the buffer instead of
+    // pretending to encode it. Drain any complete frames first: a violated
+    // invariant (buffered >= one frame) must not truncate the tail.
+    if (!m_encoder) {
+        m_buf.clear();
+        return;
+    }
+    while (static_cast<int>(m_buf.size()) >= kFrameSamples) {
+        EncodeFrame(m_buf.data(), queue);
+        m_buf.erase(m_buf.begin(), m_buf.begin() + kFrameSamples);
+    }
     if (m_buf.empty()) return;
-    m_buf.resize(kFrameSamples, 0);
+    m_buf.resize(kFrameSamples, 0);  // pad the tail to one full Opus frame
     EncodeFrame(m_buf.data(), queue);
     m_buf.clear();
 }

@@ -5,6 +5,8 @@
 
 #include <string>
 #include <vector>
+#include <cmath>
+#include <limits>
 
 #include "utils.h"
 
@@ -126,6 +128,27 @@ void RunUtilsTests(testing::Context& ctx) {
         CHECK_EQ_INT(ctx, z.size(), 2);
         CHECK_EQ_INT(ctx, z[0], 0);
         CHECK_EQ_INT(ctx, z[1], 0);
+    }
+
+    CASE(ctx, "NormalizeVolume clamps to [0,1] and maps non-finite to 1.0") {
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(0.5), 0.5, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(0.0), 0.0, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(1.0), 1.0, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(-3.0), 0.0, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(42.0), 1.0, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(std::nan("")), 1.0, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(std::numeric_limits<double>::infinity()), 1.0, 1e-9);
+        CHECK_NEAR(ctx, Utils::NormalizeVolume(-std::numeric_limits<double>::infinity()), 1.0, 1e-9);
+    }
+
+    CASE(ctx, "XmlEscape escapes entities and drops characters XML cannot carry") {
+        CHECK_STR_EQ(ctx, Utils::XmlEscape("a&b<c>d\"e'f"),
+                     "a&amp;b&lt;c&gt;d&quot;e&apos;f");
+        CHECK_STR_EQ(ctx, Utils::XmlEscape("tab\tnewline\ncr\r"),
+                     "tab\tnewline\ncr\r");
+        CHECK_STR_EQ(ctx, Utils::XmlEscape(std::string("bell") + '\x07' + "del" + '\x7f'),
+                     "belldel");
+        CHECK_STR_EQ(ctx, Utils::XmlEscape(""), "");
     }
 
     CASE(ctx, "GenerateSRSGuid yields 22 base57 chars, unique per call") {
