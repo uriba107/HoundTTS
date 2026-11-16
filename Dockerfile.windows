@@ -23,7 +23,7 @@ RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
 
 ARG CMAKE_VERSION=4.4.4
-ARG GIT_VERSION=2.56.0
+ARG GIT_VERSION=2.56.1
 ARG WGET_VERSION=1.21.4
 ARG UNZIP_VERSION=6.0
 
@@ -69,7 +69,7 @@ RUN git clone --branch %VCPKG_TAG% --depth 1 https://github.com/microsoft/vcpkg.
     C:\\vcpkg\\vcpkg.exe install openssl:x64-windows-static opus:x64-windows-static nlohmann-json:x64-windows-static && \
     C:\\vcpkg\\vcpkg.exe integrate install
 
-ARG HTTPLIB_VERSION=v0.63.0
+ARG HTTPLIB_VERSION=v0.66.0
 RUN powershell -NoProfile -ExecutionPolicy Bypass -Command \
     "New-Item -ItemType Directory -Force C:\deps\include | Out-Null; \
      Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/yhirose/cpp-httplib/' + $env:HTTPLIB_VERSION + '/httplib.h') \
