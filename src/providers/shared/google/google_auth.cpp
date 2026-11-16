@@ -50,16 +50,9 @@ std::string JsonString(const std::string& json, const std::string& field) {
 // JSON escaping
 // ---------------------------------------------------------------------------
 std::string JsonEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if (c == '"')       out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else if (c == '\t') out += "\\t";
-        else                out += c;
-    }
-    return out;
+    // Single shared implementation (also escapes control characters, which the
+    // previous local copy let through and produced invalid JSON).
+    return Utils::JsonEscape(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,11 +104,20 @@ static std::string RS256Sign(const std::string& data, const std::string& pemKey)
             data.size()) == 1)
     {
         size_t sigLen = 0;
-        if (EVP_DigestSignFinal(ctx, nullptr, &sigLen) == 1) {
+        if (EVP_DigestSignFinal(ctx, nullptr, &sigLen) == 1 && sigLen > 0) {
             sig.resize(sigLen);
-            EVP_DigestSignFinal(ctx,
-                reinterpret_cast<unsigned char*>(&sig[0]), &sigLen);
-            sig.resize(sigLen);
+            // The second call must be checked: a silent failure would return a
+            // zero-filled "signature" and produce a confusing 401 from Google.
+            if (EVP_DigestSignFinal(ctx,
+                    reinterpret_cast<unsigned char*>(&sig[0]), &sigLen) == 1) {
+                sig.resize(sigLen);
+            } else {
+                LogE("EVP_DigestSignFinal failed while producing the JWT signature");
+                sig.clear();
+            }
+        } else {
+            LogE("EVP_DigestSignFinal failed to size the JWT signature");
+            sig.clear();
         }
     }
 
@@ -163,8 +165,8 @@ std::string GetAccessToken(const std::string& clientEmail,
     long now = static_cast<long>(std::time(nullptr));
     std::ostringstream claims;
     claims << "{"
-           << "\"iss\":\"" << clientEmail << "\","
-           << "\"scope\":\"" << scope << "\","
+           << "\"iss\":\"" << JsonEscape(clientEmail) << "\","
+           << "\"scope\":\"" << JsonEscape(scope) << "\","
            << "\"aud\":\"https://oauth2.googleapis.com/token\","
            << "\"iat\":" << now << ","
            << "\"exp\":" << (now + 3600)

@@ -40,9 +40,11 @@ public:
     // Stream Opus frames from queue over UDP using a 40ms multimedia timer.
     // Blocks until the queue is drained and marked done.
     // Sends a silence frame if the queue is momentarily empty but not done.
+    // queue    : shared_ptr so the timer state owns it; a leaked state (see
+    //            the drain timeout) can never reference a destroyed queue.
     // session  : if non-null, checks session->alive to stop early (kill signal).
     // posData  : if non-null, registers sendPositionSync callback for position updates.
-    void StreamFromQueue(AudioQueue& queue,
+    void StreamFromQueue(std::shared_ptr<AudioQueue> queue,
                          const std::vector<FreqMod>& freqs,
                          uint32_t unitId,
                          std::shared_ptr<HoundTTS::Session> session = nullptr,

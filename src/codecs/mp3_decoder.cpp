@@ -13,6 +13,11 @@ static void ResampleAppend(const int16_t* src, size_t srcCount,
         return;
     }
 
+    // Reject non-positive and implausibly low rates. The source is an
+    // untrusted MP3 frame (Edge TTS); a tiny positive rate would make
+    // dstCount = srcCount/ratio enormous and drive a huge allocation.
+    if (srcRate < 8000) return;  // malformed/untrusted frame rate, drop it
+
     double ratio = static_cast<double>(srcRate) / 16000.0;
     size_t dstCount = static_cast<size_t>(srcCount / ratio);
     if (dstCount == 0) return;

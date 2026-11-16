@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <sstream>
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
 
 namespace HoundTTS {
 
@@ -20,13 +23,15 @@ static const char kB64Chars[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static std::string Base64Decode(const std::string& in) {
-    static int table[256];
-    static bool init = false;
-    if (!init) {
-        std::fill(table, table + 256, -1);
-        for (int i = 0; i < 64; i++) table[(unsigned char)kB64Chars[i]] = i;
-        init = true;
-    }
+    // Function-local static initialisation is thread-safe in C++11+; the old
+    // lazy `init` flag raced when two synthesis threads decoded concurrently.
+    static const std::array<int, 256> table = [] {
+        std::array<int, 256> t;
+        t.fill(-1);
+        for (int i = 0; i < 64; i++) t[static_cast<unsigned char>(kB64Chars[i])] = i;
+        return t;
+    }();
+
     std::string out;
     int val = 0, bits = -8;
     for (unsigned char c : in) {
@@ -57,6 +62,11 @@ bool GoogleTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Completion backstop for direct (non-pipeline) callers: an internal throw
+    // must still complete the queue. MarkDone is idempotent, so the explicit
+    // failure-path calls below stay as they are.
+    ScopedQueueDone doneGuard(queue);
+
     if (credsFile.empty()) {
         LogE("Google credentials file not configured in HoundTTS-credentials.ini");
         queue.MarkDone();
@@ -81,20 +91,29 @@ bool GoogleTTS::SynthesizeToQueue(
     std::string locale     = culture.empty() ? "en-US" : culture;
     std::string ssmlGender = MapGender(gender);
 
+    if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.25) speed = 0.25;
     if (speed > 4.0)  speed = 4.0;
+    volume = Utils::NormalizeVolume(volume);
 
-    bool isSsml = (text.size() >= 6 && text.compare(0, 6, "<speak") == 0 &&
-                   (text.size() == 6 || text[6] == '>' || std::isspace((unsigned char)text[6])));
+    // Match AWS/Azure: skip leading whitespace and require a tag boundary.
+    size_t ssmlOff = 0;
+    while (ssmlOff < text.size() && std::isspace(static_cast<unsigned char>(text[ssmlOff])))
+        ++ssmlOff;
+    bool isSsml = (text.size() - ssmlOff >= 6 &&
+                   text.compare(ssmlOff, 6, "<speak") == 0 &&
+                   (text.size() - ssmlOff == 6 ||
+                    text[ssmlOff + 6] == '>' ||
+                    std::isspace(static_cast<unsigned char>(text[ssmlOff + 6]))));
 
     std::ostringstream body;
     body << "{"
          << "\"input\":{\"" << (isSsml ? "ssml" : "text") << "\":\"" << GoogleAuth::JsonEscape(text) << "\"},"
          << "\"voice\":{"
-         << "\"languageCode\":\"" << locale << "\","
+         << "\"languageCode\":\"" << Utils::JsonEscape(locale) << "\","
          << "\"ssmlGender\":\"" << ssmlGender << "\"";
     if (!voice.empty())
-        body << ",\"name\":\"" << voice << "\"";
+        body << ",\"name\":\"" << Utils::JsonEscape(voice) << "\"";
     body << "},"
          << "\"audioConfig\":{"
          << "\"audioEncoding\":\"LINEAR16\","
@@ -143,13 +162,12 @@ bool GoogleTTS::SynthesizeToQueue(
         return false;
     }
 
-    int sampleCount = static_cast<int>(pcmRaw.size() / 2);
-    std::vector<int16_t> samples(reinterpret_cast<const int16_t*>(pcmRaw.data()),
-                                  reinterpret_cast<const int16_t*>(pcmRaw.data()) + sampleCount);
+    // memcpy into an int16 vector: casting the byte buffer to int16_t* is
+    // undefined behaviour (alignment + strict aliasing).
+    std::vector<int16_t> samples = Utils::PcmBytesToSamples(pcmRaw.data(), pcmRaw.size());
     if (volume < 1.0) {
-        double vol = std::max(0.0, std::min(1.0, volume));
         for (auto& s : samples)
-            s = static_cast<int16_t>(s * vol);
+            s = static_cast<int16_t>(s * volume);
     }
     queue.Push(std::move(samples));
     queue.MarkDone();

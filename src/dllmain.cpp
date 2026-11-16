@@ -4,6 +4,7 @@
 #include "lua_translate.h"
 #include "utils.h"
 
+#include <exception>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -13,13 +14,32 @@
 // ---------------------------------------------------------------------------
 static int l_init(lua_State* L) {
     const char* writedir = luaL_checkstring(L, 1);
-    HoundTTS::ConfigReader::Instance().Load(std::string(writedir));
-    HoundTTS::Logger::Instance().Init(std::string(writedir));
-    std::string lvl = HoundTTS::ConfigReader::Instance().GetLogLevel();
-    HoundTTS::LogLevel logLvl = HoundTTS::LogLevel::LEVEL_ERROR;
-    if (lvl == "debug" || lvl == "DEBUG") logLvl = HoundTTS::LogLevel::LEVEL_DEBUG;
-    else if (lvl == "info" || lvl == "INFO") logLvl = HoundTTS::LogLevel::LEVEL_INFO;
-    HoundTTS::Logger::Instance().SetLevel(logLvl);
+    // A C++ exception must never unwind across the Lua C API boundary (UB).
+    try {
+        // Initialize logging first so a failure while loading config is still
+        // persisted to the log file instead of only OutputDebugString.
+        HoundTTS::Logger::Instance().Init(std::string(writedir));
+        HoundTTS::ConfigReader::Instance().Load(std::string(writedir));
+        std::string lvl = HoundTTS::ConfigReader::Instance().GetLogLevel();
+        HoundTTS::LogLevel logLvl = HoundTTS::LogLevel::LEVEL_ERROR;
+        if (lvl == "debug" || lvl == "DEBUG") logLvl = HoundTTS::LogLevel::LEVEL_DEBUG;
+        else if (lvl == "info" || lvl == "INFO") logLvl = HoundTTS::LogLevel::LEVEL_INFO;
+        HoundTTS::Logger::Instance().SetLevel(logLvl);
+    } catch (const std::exception& e) {
+        // The logging call itself can throw (allocation); it must not escape
+        // the handler and unwind across the Lua C API boundary.
+        try {
+            HoundTTS::Logger::Instance().Error(
+                "HoundTTS/init", std::string("init failed: ") + e.what());
+        } catch (...) {}
+        return luaL_error(L, "HoundTTS.init failed: %s", e.what());
+    } catch (...) {
+        try {
+            HoundTTS::Logger::Instance().Error(
+                "HoundTTS/init", "init failed: unknown exception");
+        } catch (...) {}
+        return luaL_error(L, "HoundTTS.init failed: unknown exception");
+    }
     return 0;
 }
 

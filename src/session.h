@@ -92,7 +92,10 @@ public:
     // All code that touches backendData (srs_backend.cpp, lua_tts.cpp) must
     // release backendMutex before calling SessionManager methods that acquire m_mutex.
     void Reap() {
-        // Snapshot keys under m_mutex, then probe each session without nesting locks.
+        // Snapshot candidates under m_mutex, then re-check each one. The probe
+        // re-acquires m_mutex and then backendMutex — that is the documented
+        // order (m_mutex before backendMutex). Callers must never hold
+        // backendMutex while calling into SessionManager.
         std::vector<std::string> candidates;
         {
             std::lock_guard<std::mutex> lock(m_mutex);

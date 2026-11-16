@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <atomic>
+#include <exception>
 
 namespace HoundTTS {
 
@@ -110,8 +111,8 @@ private:
 // Subclass of PCMQueue so providers (which take PCMQueue&) can use it directly.
 // Thread-safety: Push/MarkDone/MarkFailed/Finalize may be invoked from the
 // provider synthesis thread while the caller thread observes completion via
-// the downstream queue. accumulator_ is guarded by accMutex_; failed_ and
-// doneForwarded_ are std::atomic.
+// the downstream queue. accumulator_ is guarded by accMutex_; finalized_,
+// failed_ and doneForwarded_ are std::atomic.
 //
 // Cache-commit lifecycle:
 //   - MarkDone()      → forwards done to downstream only (does NOT commit).
@@ -126,6 +127,14 @@ private:
 //                       to the downstream queue (idempotent).
 //
 // Requires: downstream must be non-null (throws std::invalid_argument if null).
+//
+// Lock order: this wrapper must sit INSIDE a PaddedPCMQueue, i.e. the only
+// supported chain is PaddedPCMQueue -> CachingPCMQueue -> PCMQueue (as built
+// by TTSPipeline::Produce). Push()/MarkDone() hold accMutex_ across the
+// downstream forward, while PaddedPCMQueue holds opMutex_ across its own, so
+// nesting cache-over-pad would acquire accMutex_ -> opMutex_ on Push against
+// opMutex_ -> accMutex_ on completion and can deadlock. A wrapper must never
+// hold its own mutex across a downstream call that takes another wrapper's.
 // ---------------------------------------------------------------------------
 class CachingPCMQueue : public PCMQueue {
 public:
@@ -139,12 +148,25 @@ public:
     }
 
     void Push(std::vector<int16_t> chunk) override {
-        {
-            std::lock_guard<std::mutex> lock(accMutex_);
-            accumulator_.insert(accumulator_.end(), chunk.begin(), chunk.end());
+        // Hold accMutex_ across the downstream forward: Finalize() swaps the
+        // accumulator under the same lock, so releasing it between the append
+        // and the forward would let Finalize() cache a chunk that Push then
+        // drops as "already finalized" — cached audio that was never played.
+        std::lock_guard<std::mutex> lock(accMutex_);
+        if (finalized_.load(std::memory_order_acquire)) return;  // late push after finalize
+        if (doneForwarded_.load(std::memory_order_acquire)) return;  // late push after completion
+        // Forward to downstream consumer (downstream handles its own locking).
+        // Roll the accumulator back if the forward throws: a retry (e.g. the
+        // padded queue re-issuing its tail) must not append the same chunk
+        // twice, which would cache duplicate audio.
+        const size_t prevSize = accumulator_.size();
+        accumulator_.insert(accumulator_.end(), chunk.begin(), chunk.end());
+        try {
+            downstream_->Push(std::move(chunk));
+        } catch (...) {
+            accumulator_.resize(prevSize);
+            throw;
         }
-        // Forward to downstream consumer (downstream handles its own locking)
-        downstream_->Push(std::move(chunk));
     }
 
     // Forwards completion to the downstream queue so blocked consumers in
@@ -152,8 +174,29 @@ public:
     // decision is deferred to Finalize() so the pipeline can suppress
     // caching when the provider reports failure.
     void MarkDone() override {
-        if (doneForwarded_.exchange(true, std::memory_order_acq_rel)) return;
-        downstream_->MarkDone();
+        std::exception_ptr ep;
+        {
+            // Serialize with Push()/Finalize(): a completion must not overtake a
+            // chunk that is mid-forward, and a late Push must see the latch.
+            std::lock_guard<std::mutex> lock(accMutex_);
+            // Complete this queue first so local consumers wake even if the
+            // downstream forward throws.
+            try {
+                PCMQueue::MarkDone();
+            } catch (...) {
+                ep = std::current_exception();
+            }
+            if (!doneForwarded_.exchange(true, std::memory_order_acq_rel)) {
+                try {
+                    downstream_->MarkDone();
+                } catch (...) {
+                    // Leave the latch clear so a later retry can re-forward.
+                    doneForwarded_.store(false, std::memory_order_release);
+                    if (!ep) ep = std::current_exception();
+                }
+            }
+        }
+        if (ep) std::rethrow_exception(ep);
     }
 
     // Latch the "failed" flag; any subsequent Finalize() will skip cache
@@ -165,20 +208,39 @@ public:
     // Commit the accumulated buffer to PCMCache iff success && !failed &&
     // non-empty, then forward MarkDone() to the downstream queue. Call from
     // the pipeline once the provider returns, with ok = provider return value.
+    // Exception-safe: a throwing commit (allocation/OOM) must still deliver
+    // MarkDone, otherwise consumers blocked in Pop() never wake.
     void Finalize(bool success) {
         if (!success) failed_.store(true, std::memory_order_release);
-        if (!failed_.load(std::memory_order_acquire)) {
+        std::exception_ptr ep;
+        try {
             std::vector<int16_t> pcm;
             {
                 std::lock_guard<std::mutex> lock(accMutex_);
-                pcm.swap(accumulator_);
+                finalized_.store(true, std::memory_order_release);
+                if (!failed_.load(std::memory_order_acquire))
+                    pcm.swap(accumulator_);
+                else
+                    // Never committed — release the buffered PCM immediately
+                    // instead of holding it until the queue is destroyed.
+                    std::vector<int16_t>().swap(accumulator_);
             }
             if (!pcm.empty()) {
                 auto sp = std::make_shared<std::vector<int16_t>>(std::move(pcm));
                 PCMCache::Instance().Put(cacheKey_, std::move(sp));
             }
+        } catch (...) {
+            ep = std::current_exception();
         }
-        MarkDone();
+        try {
+            MarkDone();
+        } catch (...) {
+            // Preserve a commit exception as primary; MarkDone() has already
+            // set this queue's own done before attempting the forward, so the
+            // completion failure is not allowed to mask the commit failure.
+            if (!ep) ep = std::current_exception();
+        }
+        if (ep) std::rethrow_exception(ep);
     }
 
 private:
@@ -186,6 +248,7 @@ private:
     uint64_t cacheKey_;
     std::mutex accMutex_;
     std::vector<int16_t> accumulator_;
+    std::atomic<bool> finalized_{false};   // set under accMutex_ by Finalize
     std::atomic<bool> failed_{false};
     std::atomic<bool> doneForwarded_{false};
 };

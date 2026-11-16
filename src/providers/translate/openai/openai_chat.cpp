@@ -52,19 +52,6 @@ static std::string CodeToLanguageName(const std::string& lang) {
     return lang;
 }
 
-static std::string JsonEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if (c == '"')       out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else if (c == '\t') out += "\\t";
-        else                out += c;
-    }
-    return out;
-}
-
 static bool ParseEndpoint(const std::string& endpoint,
                            bool& outSsl, std::string& outHost,
                            int& outPort, std::string& outPath)
@@ -110,25 +97,8 @@ static std::string ExtractContent(const std::string& json) {
     if (pos >= json.size()) return "";
     if (json.substr(pos, 4) == "null") return "";
     if (json[pos] != '"') return "";
-    ++pos;
-    std::string result;
-    while (pos < json.size()) {
-        char c = json[pos];
-        if (c == '\\' && pos + 1 < json.size()) {
-            char next = json[pos + 1];
-            if      (next == '"')  { result += '"';  pos += 2; }
-            else if (next == '\\') { result += '\\'; pos += 2; }
-            else if (next == 'n')  { result += '\n'; pos += 2; }
-            else if (next == 'r')  { result += '\r'; pos += 2; }
-            else if (next == 't')  { result += '\t'; pos += 2; }
-            else { result += c; ++pos; }
-        } else if (c == '"') {
-            break;
-        } else {
-            result += c;
-            ++pos;
-        }
-    }
+    // Shared decoder handles all escapes and \uXXXX / surrogate pairs.
+    std::string result = Utils::JsonDecodeString(json, pos + 1);
     auto start = result.find_first_not_of(" \t\r\n");
     if (start == std::string::npos) return "";
     auto end = result.find_last_not_of(" \t\r\n");
@@ -160,11 +130,11 @@ std::string OpenAIChat::Translate(
 
     std::ostringstream body;
     body << "{"
-         << "\"model\":\"" << JsonEscape(chatModel) << "\""
+         << "\"model\":\"" << Utils::JsonEscape(chatModel) << "\""
          << ",\"temperature\":0"
          << ",\"messages\":["
          <<   "{\"role\":\"system\",\"content\":\""
-         <<     JsonEscape("You are a plain-text military aviation translation engine. "
+         <<     Utils::JsonEscape("You are a plain-text military aviation translation engine. "
                            "Your sole function is to translate the user-provided text into the requested language. "
                            "Output ONLY the translated text. No explanations, no commentary, no quotation marks, "
                            "no markdown, no formatting, no preamble, no sign-off. "
@@ -182,7 +152,7 @@ std::string OpenAIChat::Translate(
                            "RTB, IFF, BVR, WVR, CAS, JTAC, FAC, ROE, TAC, AWACS, GCI, CAP, SEAD, DEAD.")
          <<   "\"}"
          <<   ",{\"role\":\"user\",\"content\":\""
-         <<     JsonEscape("Translate to " + CodeToLanguageName(language) + ":\n" + text)
+         <<     Utils::JsonEscape("Translate to " + CodeToLanguageName(language) + ":\n" + text)
          <<   "\"}"
          << "]"
          << "}";

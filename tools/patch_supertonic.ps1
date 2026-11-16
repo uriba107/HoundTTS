@@ -9,7 +9,14 @@ $c = [System.IO.File]::ReadAllText($f)
 $old1 = 'return std::make_unique<Ort::Session>(env, onnx_path.c_str(), opts);'
 $new1 = 'return std::make_unique<Ort::Session>(env, std::filesystem::path(onnx_path).wstring().c_str(), opts);'
 
-if ($c.Contains($old1)) {
+# Idempotent: a re-run finds the already-patched text ($new1) and no longer
+# finds the original ($old1), which must be a no-op skip rather than a throw.
+$oldCount = ([regex]::Matches($c, [regex]::Escape($old1))).Count
+$newCount = ([regex]::Matches($c, [regex]::Escape($new1))).Count
+
+if ($newCount -gt 0 -and $oldCount -eq 0) {
+    Write-Host "patch1 skipped (already applied)"
+} elseif ($oldCount -gt 0) {
     $c = $c.Replace($old1, $new1)
     Write-Host "patch1 applied (loadOnnx: char* -> wchar_t*)"
 } else {

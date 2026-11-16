@@ -14,11 +14,19 @@ ConfigReader& ConfigReader::Instance() {
     return instance;
 }
 
+// Whitespace recognised by both Trim() and the inline-comment scan, so the two
+// rules cannot drift.
+static bool IsIniSpace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
 std::string ConfigReader::Trim(const std::string& s) {
-    size_t start = s.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return "";
-    size_t end = s.find_last_not_of(" \t\r\n");
-    return s.substr(start, end - start + 1);
+    size_t start = 0;
+    while (start < s.size() && IsIniSpace(s[start])) ++start;
+    if (start == s.size()) return "";
+    size_t end = s.size();
+    while (end > start && IsIniSpace(s[end - 1])) --end;
+    return s.substr(start, end - start);
 }
 
 void ConfigReader::Load(const std::string& writedir) {
@@ -136,10 +144,29 @@ void ConfigReader::ParseIni(const std::string& content) {
         std::string key = Trim(line.substr(0, eq));
         std::string val = Trim(line.substr(eq + 1));
 
-        // Strip inline comments
-        size_t semi = val.find(';');
-        if (semi != std::string::npos)
-            val = Trim(val.substr(0, semi));
+        // Strip inline comments, but never inside a quoted span: a ';' or '#'
+        // in a quoted URL/token/path is part of the value, not a comment.
+        // Quote state is tracked across the WHOLE value so a partially quoted
+        // value ("prefix 'a;b'") is protected too; an unclosed quote protects
+        // the remainder. A '#' starts a comment at the start of the value
+        // (followed by whitespace/end) or when preceded by whitespace, and
+        // always when it follows a closing quote ("v" # note / "v"#note).
+        size_t cut = val.size();
+        bool inSingle = false, inDouble = false, closedQuote = false;
+        for (size_t i = 0; i < val.size(); ++i) {
+            const char c = val[i];
+            if (c == '"' && !inSingle)  { inDouble = !inDouble; closedQuote = !inDouble; continue; }
+            if (c == '\'' && !inDouble) { inSingle = !inSingle; closedQuote = !inSingle; continue; }
+            if (inSingle || inDouble) continue;
+            if (c == ';') { cut = i; break; }
+            if (c == '#') {
+                const bool precededBySpace = (i > 0) && IsIniSpace(val[i - 1]);
+                const bool atValueStart =
+                    (i == 0) && (val.size() == 1 || IsIniSpace(val[1]));
+                if (closedQuote || precededBySpace || atValueStart) { cut = i; break; }
+            }
+        }
+        if (cut < val.size()) val = Trim(val.substr(0, cut));
 
         // Strip surrounding quotes (single or double) — paths with spaces don't need them
         if (val.size() >= 2 &&

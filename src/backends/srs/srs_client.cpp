@@ -92,46 +92,73 @@ static const int kFixedSize     = 57;  // UnitID(4) + PacketID(8) + Hops(1) + Re
 
 // ---------------------------------------------------------------------------
 // Timer callback state (passed via dwUser as pointer)
+//
+// Self-contained: it owns the queue, a copy of the frequency list and a copy of
+// the GUID, so the deliberately leaked instance (see StreamCleanup) can never
+// dangle on objects owned by a worker thread that already finished.
 // ---------------------------------------------------------------------------
 struct TimerState {
-    AudioQueue*                  queue;
-    const std::vector<FreqMod>*  freqs;
+    std::shared_ptr<AudioQueue>  queue;
+    std::vector<FreqMod>         freqs;
     uint32_t                     unitId;
-    const std::string*           guid;
+    std::string                  guid;
     SOCKET                       udpSock;
     sockaddr_in                  udpAddr;
     std::atomic<uint64_t>        packetId{0};
     std::atomic<bool>            finished{false};
+    // Teardown coordination: the callback registers itself before touching any
+    // other member, and StreamFromQueue waits for in-flight callbacks before the
+    // state object (a stack local) goes away.
+    std::atomic<int>             callbacks{0};
+    std::atomic<bool>            stopping{false};
     // Pre-encoded silence frame (sent when queue is momentarily empty)
     std::vector<uint8_t>         silenceFrame;
 };
 
 static void CALLBACK TimerProc(UINT, UINT, DWORD_PTR dwUser, DWORD_PTR, DWORD_PTR) {
     auto* s = reinterpret_cast<TimerState*>(dwUser);
-    if (s->finished.load()) return;
+    // Register before touching anything else: StreamFromQueue kills the timer
+    // and then waits for this counter to drain before destroying the state.
+    s->callbacks.fetch_add(1, std::memory_order_seq_cst);
+    struct CallbackGuard {
+        TimerState* s;
+        ~CallbackGuard() { s->callbacks.fetch_sub(1, std::memory_order_seq_cst); }
+    } callbackGuard{s};
 
-    bool done = false;
-    auto frame = s->queue->Pop(0, &done);
+    // A throw out of a Windows multimedia-timer callback reaches the timer
+    // infrastructure and calls std::terminate, so nothing may escape.
+    try {
+        if (s->stopping.load(std::memory_order_seq_cst)) return;
+        if (s->finished.load()) return;
 
-    if (frame.empty()) {
-        if (done) {
-            s->finished.store(true);
-            return;
+        bool done = false;
+        auto frame = s->queue->Pop(0, &done);
+
+        if (frame.empty()) {
+            if (done) {
+                s->finished.store(true);
+                return;
+            }
+            // Queue momentarily empty but producer still running — send silence
+            frame = s->silenceFrame;
         }
-        // Queue momentarily empty but producer still running — send silence
-        frame = s->silenceFrame;
+
+        auto packet = SRSClient::BuildVoicePacket(
+            frame, s->freqs, s->unitId,
+            s->packetId.fetch_add(1), s->guid);
+        if (packet.empty()) return;  // inputs outgrew the uint16 length fields
+
+        sendto(s->udpSock,
+               reinterpret_cast<const char*>(packet.data()),
+               static_cast<int>(packet.size()),
+               0,
+               reinterpret_cast<const sockaddr*>(&s->udpAddr),
+               sizeof(s->udpAddr));
+    } catch (const std::exception& e) {
+        try { LogE(std::string("TimerProc exception: ") + e.what()); } catch (...) {}
+    } catch (...) {
+        try { LogE("TimerProc unknown exception"); } catch (...) {}
     }
-
-    auto packet = SRSClient::BuildVoicePacket(
-        frame, *s->freqs, s->unitId,
-        s->packetId.fetch_add(1), *s->guid);
-
-    sendto(s->udpSock,
-           reinterpret_cast<const char*>(packet.data()),
-           static_cast<int>(packet.size()),
-           0,
-           reinterpret_cast<const sockaddr*>(&s->udpAddr),
-           sizeof(s->udpAddr));
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +188,7 @@ static void WriteDouble(uint8_t* buf, double v) {
 SRSClient::SRSClient() {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
-    m_guid = GenerateGUID();
+    m_guid = Utils::GenerateSRSGuid();
 }
 
 SRSClient::~SRSClient() {
@@ -172,6 +199,13 @@ SRSClient::~SRSClient() {
 bool SRSClient::Connect(const std::string& host, int port) {
     m_host = host;
     m_port = port;
+
+    if (m_guid.empty()) {
+        LogE("SRS GUID generation failed — refusing to connect");
+        return false;
+    }
+
+    Disconnect(); // release sockets left over from a previous Connect() attempt
 
     // --- TCP ---
     m_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -191,6 +225,8 @@ bool SRSClient::Connect(const std::string& host, int port) {
     if (connect(m_tcp, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         LogE("TCP connect() failed host=" + host + " port=" + std::to_string(port) +
              " WSA=" + std::to_string(WSAGetLastError()));
+        closesocket(m_tcp);
+        m_tcp = INVALID_SOCKET;
         return false;
     }
 
@@ -198,6 +234,8 @@ bool SRSClient::Connect(const std::string& host, int port) {
     m_udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (m_udp == INVALID_SOCKET) {
         LogE("UDP socket() failed WSA=" + std::to_string(WSAGetLastError()));
+        closesocket(m_tcp);
+        m_tcp = INVALID_SOCKET;
         return false;
     }
 
@@ -332,11 +370,15 @@ void SRSClient::SendPing() {
            sizeof(addr));
 }
 
-void SRSClient::StreamFromQueue(AudioQueue& queue,
+void SRSClient::StreamFromQueue(std::shared_ptr<AudioQueue> queue,
                                  const std::vector<FreqMod>& freqs,
                                  uint32_t unitId,
                                  std::shared_ptr<HoundTTS::Session> session,
                                  std::shared_ptr<SRSPositionData> posData) {
+    if (!queue) {
+        LogE("StreamFromQueue called with a null queue; aborting");
+        return;
+    }
     // Build a silence Opus frame (used when queue is momentarily empty)
     // A single Opus frame of silence is just encoding 640 zero samples.
     // We pre-encode it here using a temporary encoder.
@@ -361,7 +403,7 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
     sockaddr_in udpAddr{};
     if (!ResolveAddress(m_host, m_port, udpAddr)) {
         LogE("StreamFromQueue resolve failed host=" + m_host + " port=" + std::to_string(m_port));
-        queue.MarkDone();
+        queue->MarkDone();
         return;
     }
 
@@ -373,19 +415,27 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
            reinterpret_cast<const sockaddr*>(&udpAddr),
            sizeof(udpAddr));
 
-    // Wait for startup buffer (5 frames = ~200ms) before starting timer
+    // Wait for startup buffer (5 frames = ~200ms) before starting timer.
+    // Also honour the session kill signal: an aborted session must not sit here
+    // for the full deadline waiting for frames that will never arrive.
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue.Size() < 5 && !queue.IsDone()) {
+    while (queue->Size() < 5 && !queue->IsDone() &&
+           !(session && !session->alive.load())) {
         if (std::chrono::steady_clock::now() > deadline) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    // Set up timer state
-    TimerState state;
-    state.queue        = &queue;
-    state.freqs        = &freqs;
+    // Set up timer state. Heap-allocated so a callback that outlives the drain
+    // wait below cannot be left pointing at a destroyed object: on timeout the
+    // state is deliberately leaked instead of freed under a running callback.
+    // The state owns everything the callback touches (queue via shared_ptr,
+    // copies of freqs/guid), so the leak cannot reference freed memory.
+    auto stateOwner = std::make_unique<TimerState>();
+    TimerState& state = *stateOwner;
+    state.queue        = queue;
+    state.freqs        = freqs;
     state.unitId       = unitId;
-    state.guid         = &m_guid;
+    state.guid         = m_guid;
     state.udpSock      = m_udp;
     state.udpAddr      = udpAddr;
     state.silenceFrame = silenceFrame;
@@ -417,10 +467,20 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
                                 (now - posData->lastSentAt >= std::chrono::seconds(175));
             if (!posChanged && !heartbeatDue) return;
 
+            // Retry a failed update at most once per second. A failed send is
+            // not recorded as delivered (below), so it stays eligible; without
+            // this throttle the 10 ms stream loop would resend and log on every
+            // iteration while the server is unreachable.
+            if (now - posData->lastAttemptAt < std::chrono::seconds(1)) return;
+            posData->lastAttemptAt = now;
+
             std::string metaJson = BuildClientMetadataJson(cap_coalition, cap_name, lat, lon, alt);
             std::ostringstream msg;
             msg << R"({"Version":")" << kSRSVersion
                 << R"(","MsgType":0,"Client":)" << metaJson << "}";
+            // Record the position only after a successful send: a failed TCP
+            // send must stay eligible for retry instead of restarting the 175 s
+            // heartbeat window as if it had been delivered.
             if (SendTCP(msg.str())) {
                 posData->lastSentLat = lat;
                 posData->lastSentLon = lon;
@@ -436,6 +496,55 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
         TimerProc,
         reinterpret_cast<DWORD_PTR>(&state),
         TIME_PERIODIC);
+    // Releases the multimedia timer, restores the timer period and clears the
+    // position callback on every exit path — including an exception thrown by
+    // the send/wait loop below, which would otherwise leak all three.
+    struct StreamCleanup {
+        MMRESULT timerId;
+        TimerState* state;
+        std::unique_ptr<TimerState>& owner;
+        std::shared_ptr<SRSPositionData> posData;
+        ~StreamCleanup() {
+            // Runs during stack unwinding too: nothing may throw out of it.
+            try {
+                if (timerId) {
+                    // Publish the stop first, then kill: a callback that has already
+                    // started sees `stopping` and returns without touching `state`.
+                    // timeKillEvent does not abort a callback in flight, so wait for
+                    // the counter to drain before `state` dies.
+                    state->stopping.store(true, std::memory_order_seq_cst);
+                    timeKillEvent(timerId);
+                    for (int i = 0; i < 20000 && state->callbacks.load() != 0; ++i)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (state->callbacks.load() != 0) {
+                        // A callback is still running and may touch `state` when
+                        // it resumes. Destroying it here would be a use-after-free,
+                        // and blocking forever would wedge the TTS worker, so the
+                        // state is leaked deliberately: bounded memory, no UAF.
+                        try { LogE("SRS timer callback did not drain; leaking timer state"); } catch (...) {}
+                        owner.release();
+                    }
+                }
+                timeEndPeriod(1);
+                if (posData) {
+                    std::lock_guard<std::mutex> lk(posData->syncMutex);
+                    posData->sendPositionSync = nullptr;
+                }
+            } catch (const std::exception& e) {
+                try { LogE(std::string("StreamCleanup exception: ") + e.what()); } catch (...) {}
+            } catch (...) {
+                try { LogE("StreamCleanup unknown exception"); } catch (...) {}
+            }
+        }
+    } streamCleanup{timerId, &state, stateOwner, posData};
+    if (timerId == 0) {
+        // No timer → nothing will ever drain the queue or set state.finished.
+        // Abort cleanly instead of spinning forever in the wait loop below.
+        LogE("timeSetEvent() failed — aborting SRS stream");
+        state.finished.store(true);
+        queue->MarkDone();
+        return;
+    }
 
     // Wait until timer callback signals done, sending TCP pings every 15s.
     // Also fires a position heartbeat every 175s when posData is active.
@@ -468,19 +577,21 @@ void SRSClient::StreamFromQueue(AudioQueue& queue,
             std::lock_guard<std::mutex> lk(posData->syncMutex);
             bool heartbeatDue = (posData->lastSentAt.time_since_epoch().count() == 0) ||
                                 (now - posData->lastSentAt >= std::chrono::seconds(175));
-            if (heartbeatDue && posData->sendPositionSync)
-                posData->sendPositionSync();
+            if (heartbeatDue && posData->sendPositionSync) {
+                // A failed position update must not abort the whole stream.
+                try {
+                    posData->sendPositionSync();
+                } catch (const std::exception& e) {
+                    try { LogE(std::string("position sync failed: ") + e.what()); } catch (...) {}
+                } catch (...) {
+                    try { LogE("position sync failed: unknown exception"); } catch (...) {}
+                }
+            }
         }
     }
 
-    if (timerId) timeKillEvent(timerId);
-    timeEndPeriod(1);
-
-    // Clear position-sync callback — client is about to disconnect
-    if (posData) {
-        std::lock_guard<std::mutex> lk(posData->syncMutex);
-        posData->sendPositionSync = nullptr;
-    }
+    // Timer, timer period and the position callback are released by
+    // streamCleanup's destructor on scope exit.
 }
 
 void SRSClient::Disconnect() {
@@ -505,21 +616,32 @@ std::vector<uint8_t> SRSClient::BuildVoicePacket(
     uint64_t packetId,
     const std::string& guid)
 {
-    uint16_t audioLen = static_cast<uint16_t>(opusFrame.size());
-    uint16_t freqLen  = static_cast<uint16_t>(freqs.size() * kFreqEntrySize);
-    uint16_t totalLen = static_cast<uint16_t>(
-        kHeaderSize + audioLen + freqLen + kFixedSize);
+    // Reject inputs that cannot fit in the protocol's uint16 length fields.
+    // Truncating them would wrap the lengths and produce an out-of-bounds write.
+    constexpr size_t kMaxFreqEntries = 0xFFFFu / kFreqEntrySize;
+    if (opusFrame.size() > 0xFFFFu || freqs.size() > kMaxFreqEntries)
+        return {};
 
-    std::vector<uint8_t> pkt(totalLen, 0);
+    const size_t audioLen = opusFrame.size();
+    const size_t freqLen  = freqs.size() * kFreqEntrySize;
+    const size_t totalSize = static_cast<size_t>(kHeaderSize) + audioLen + freqLen + kFixedSize;
+    if (totalSize > 0xFFFFu) return {};
+
+    const uint16_t totalLen16 = static_cast<uint16_t>(totalSize);
+    const uint16_t audioLen16 = static_cast<uint16_t>(audioLen);
+    const uint16_t freqLen16  = static_cast<uint16_t>(freqLen);
+
+    std::vector<uint8_t> pkt(totalLen16, 0);
     uint8_t* p = pkt.data();
 
     // Header
-    WriteLE16(p,     totalLen);  p += 2;
-    WriteLE16(p,     audioLen);  p += 2;
-    WriteLE16(p,     freqLen);   p += 2;
+    WriteLE16(p,     totalLen16);  p += 2;
+    WriteLE16(p,     audioLen16);  p += 2;
+    WriteLE16(p,     freqLen16);   p += 2;
 
-    // Audio bytes
-    std::memcpy(p, opusFrame.data(), audioLen);
+    // Audio bytes (std::memcpy with a null source is UB even when size is 0)
+    if (audioLen > 0 && !opusFrame.empty())
+        std::memcpy(p, opusFrame.data(), audioLen);
     p += audioLen;
 
     // Frequencies
@@ -537,12 +659,14 @@ std::vector<uint8_t> SRSClient::BuildVoicePacket(
     // RelayGUID (22 bytes, zero-padded if shorter)
     std::memset(p, 0, 22);
     size_t gLen = std::min(guid.size(), (size_t)22);
-    std::memcpy(p, guid.data(), gLen);
+    if (gLen > 0)  // memcpy from a null source is UB even for zero bytes
+        std::memcpy(p, guid.data(), gLen);
     p += 22;
 
     // OriginGUID (same as RelayGUID for non-relay)
     std::memset(p, 0, 22);
-    std::memcpy(p, guid.data(), gLen);
+    if (gLen > 0)
+        std::memcpy(p, guid.data(), gLen);
     // p += 22; // last field, no need to advance
 
     return pkt;

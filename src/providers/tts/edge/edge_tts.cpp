@@ -26,22 +26,8 @@ static std::string GenerateConnectionId() {
     return EdgeDRM::GenerateMuid();  // same format: 32-char random hex
 }
 
-// Escape text for XML (SSML)
-static std::string XmlEscape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) {
-        switch (c) {
-            case '&':  out += "&amp;";  break;
-            case '<':  out += "&lt;";   break;
-            case '>':  out += "&gt;";   break;
-            case '"':  out += "&quot;"; break;
-            case '\'': out += "&apos;"; break;
-            default:   out += c;        break;
-        }
-    }
-    return out;
-}
+// Escape text for XML (SSML) — Utils::XmlEscape is the shared sanitiser used by
+// every provider that builds SSML, so the policy cannot drift.
 
 // Remove control characters that the service rejects
 static std::string RemoveIncompatibleChars(const std::string& s) {
@@ -199,7 +185,7 @@ static bool TrySynthesize(const std::string& text,
 
     // Step 2: Build and send SSML
     std::string cleanText = RemoveIncompatibleChars(text);
-    std::string escapedText = XmlEscape(cleanText);
+    std::string escapedText = Utils::XmlEscape(cleanText);
     std::string ssml = BuildSSML(escapedText, voiceName, speed);
     std::string ssmlFrame = BuildSSMLFrame(ssml);
     ws.send(ssmlFrame);
@@ -268,9 +254,8 @@ static bool TrySynthesize(const std::string& text,
             auto samples = mp3dec.Decode(mp3Data, mp3Len);
             if (!samples.empty()) {
                 if (volume < 1.0) {
-                    double vol = std::max(0.0, std::min(1.0, volume));
                     for (auto& s : samples)
-                        s = static_cast<int16_t>(s * vol);
+                        s = static_cast<int16_t>(s * volume);
                 }
 
                 if (!preBufFlushed) {
@@ -313,6 +298,19 @@ bool EdgeTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Completion backstop for direct (non-pipeline) callers: an internal throw
+    // must still complete the queue. MarkDone is idempotent, so the explicit
+    // failure-path call below stays as it is.
+    ScopedQueueDone doneGuard(queue);
+
+    // NaN/Inf would make the int cast in BuildSSML UB and can produce an absurd
+    // prosody rate; normalise like the other cloud providers. Edge maps speed to
+    // an SSML prosody-rate percentage, so a finite-but-extreme value must be
+    // clamped too or the int cast overflows.
+    if (!std::isfinite(speed)) speed = 1.0;
+    if (speed < 0.1) speed = 0.1;
+    if (speed > 10.0) speed = 10.0;
+    volume = Utils::NormalizeVolume(volume);
     std::string voiceName = ResolveVoice(voice, culture, gender);
     LogI("Edge TTS: voice=" + voiceName + " speed=" + std::to_string(speed));
 
@@ -325,7 +323,20 @@ bool EdgeTTS::SynthesizeToQueue(
         // so apply a heuristic: nudge clock by +5 seconds.
         LogI("Edge TTS: first attempt failed (possible 403), retrying with clock skew adjustment");
         EdgeDRM::AdjustClockSkew(5.0);
-        success = TrySynthesize(text, voiceName, speed, volume, queue, got403);
+        try {
+            success = TrySynthesize(text, voiceName, speed, volume, queue, got403);
+        } catch (...) {
+            // Revert the nudge before the exception leaves this function:
+            // repeated exceptional failures must not accumulate skew into a
+            // permanent 403 feedback loop.
+            EdgeDRM::AdjustClockSkew(-5.0);
+            throw;
+        }
+        if (!success) {
+            // Revert the nudge on failure: repeated unrecoverable failures must
+            // not accumulate skew into a permanent 403 feedback loop.
+            EdgeDRM::AdjustClockSkew(-5.0);
+        }
     }
 
     queue.MarkDone();

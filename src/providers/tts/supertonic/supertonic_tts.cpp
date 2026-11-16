@@ -9,6 +9,7 @@
 #include <mutex>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <atomic>
 #include <condition_variable>
@@ -166,10 +167,25 @@ public:
                                 std::vector<float>& out_pcm,
                                 int& out_sample_rate) {
         std::unique_lock<std::shared_mutex> writeLock(styleMutex_);
-        if (stylePath != cachedStylePath_) {
+        // Output contract: on every path (early return, failure, exception) the
+        // caller sees a defined value rather than stale/uninitialised data.
+        out_pcm.clear();
+        out_sample_rate = 0;
+        // Snapshot the context under ctxMutex_ (lock order: styleMutex_ ->
+        // ctxMutex_) so a concurrent EnsureContext()/reassignment cannot be
+        // observed mid-use. The pointer is stable for the pool's lifetime.
+        supertonic_context* ctx;
+        {
             std::lock_guard<std::mutex> ctxLock(ctxMutex_);
+            ctx = ctx_;
+        }
+        if (!ctx) {
+            LogE("supertonic context not initialised");
+            return SUPERTONIC_ERR;
+        }
+        if (stylePath != cachedStylePath_) {
             int rc = SupertonicNative::Instance().LoadStyle(
-                ctx_, stylePath.c_str());
+                ctx, stylePath.c_str());
             if (rc != SUPERTONIC_OK) {
                 LogE("supertonic_load_style failed: " + stylePath);
                 return rc;
@@ -178,10 +194,17 @@ public:
         }
         supertonic_audio_chunk chunk{};
         int rc = SupertonicNative::Instance().Synthesize(
-            ctx_, text, lang, steps, speed, &chunk);
+            ctx, text, lang, steps, speed, &chunk);
         if (rc == SUPERTONIC_OK && chunk.samples && chunk.num_samples > 0) {
-            out_pcm.assign(chunk.samples, chunk.samples + chunk.num_samples);
-            out_sample_rate = chunk.sample_rate;
+            // assign() can throw (bad_alloc); the native buffer must still be
+            // released, and the exception must still reach the caller.
+            try {
+                out_pcm.assign(chunk.samples, chunk.samples + chunk.num_samples);
+                out_sample_rate = chunk.sample_rate;
+            } catch (...) {
+                SupertonicNative::Instance().FreeResult(&chunk);
+                throw;
+            }
         }
         SupertonicNative::Instance().FreeResult(&chunk);
         return rc;
@@ -200,7 +223,10 @@ public:
             std::lock_guard<std::mutex> lock(slotMutex_);
             --activeCount_;
         }
-        slotCv_.notify_one();
+        // The wakeup is best-effort and must not throw AFTER the decrement:
+        // SlotGuard::Release() only marks the slot returned once this returns,
+        // so a throw here would make the destructor retry and decrement twice.
+        try { slotCv_.notify_one(); } catch (...) {}
     }
 
     void FreeResult(supertonic_audio_chunk* chunk) {
@@ -248,7 +274,8 @@ static std::vector<int16_t> Resample(const int16_t* in, int inCount,
 
 static void ApplyVolume(std::vector<int16_t>& chunk, double volume) {
     if (volume >= 1.0) return;
-    double vol = std::max(0.0, std::min(1.0, volume));
+    const double vol = Utils::NormalizeVolume(volume);
+    if (vol >= 1.0) return;
     for (auto& s : chunk)
         s = static_cast<int16_t>(s * vol);
 }
@@ -285,6 +312,10 @@ bool SupertonicTTS::SynthesizeToQueue(
 
     auto& pool = SupertonicPool::Instance();
 
+    // NaN/Inf would bypass the range clamp in the native synthesizer and is UB
+    // there; normalise like every other TTS provider.
+    if (!std::isfinite(speed)) speed = 1.0f;
+
     // Ensure context is created
     if (!pool.EnsureContext(modelPath, threads)) {
         queue.MarkDone();
@@ -293,6 +324,37 @@ bool SupertonicTTS::SynthesizeToQueue(
 
     // Acquire concurrency slot (blocks if at max)
     pool.AcquireSlot(maxConcurrent);
+
+    // Completion must survive a throw from Resample/Push/allocation below.
+    struct DoneGuard {
+        PCMQueue& q;
+        ~DoneGuard() noexcept { try { q.MarkDone(); } catch (...) {} }
+    } doneGuard{queue};
+
+    // Release the slot on every path, including exceptions thrown below — a
+    // leaked slot permanently reduces maxConcurrent and eventually wedges all
+    // synthesis. Release() is called explicitly once the audio is converted so
+    // completion work (resample, Push, MarkDone) does not hold a slot.
+    struct SlotGuard {
+        SupertonicPool& pool;
+        bool released = false;
+        // Runs during stack unwinding: ReleaseSlot takes a lock, so it must not
+        // throw out of the destructor.
+        ~SlotGuard() noexcept {
+            if (released) return;
+            try { pool.ReleaseSlot(); } catch (...) {}
+        }
+        void Release() {
+            if (released) return;
+            try {
+                pool.ReleaseSlot();   // only claim the slot is back once it is
+                released = true;
+            } catch (...) {
+                // Keep released=false so the destructor makes one more attempt;
+                // a normal synthesis path must not fail on slot bookkeeping.
+            }
+        }
+    } slotGuard{pool};
 
     // Atomic style-load + synthesize + copy-out. The float PCM is copied
     // under the style mutex, so ctx->result_buf is protected against
@@ -304,8 +366,9 @@ bool SupertonicTTS::SynthesizeToQueue(
         floatPcm, sampleRate);
 
     if (rc != SUPERTONIC_OK || floatPcm.empty()) {
-        pool.ReleaseSlot();
         LogE("supertonic_synthesize failed");
+        // Same as the success path: completion work must not hold a slot.
+        slotGuard.Release();
         queue.MarkDone();
         return false;
     }
@@ -322,7 +385,10 @@ bool SupertonicTTS::SynthesizeToQueue(
             std::numeric_limits<int16_t>::max()));
     }
 
-    pool.ReleaseSlot();
+    // Free the concurrency slot before the completion work below: resample,
+    // Push and MarkDone must not occupy a slot. After this point a throw is
+    // simply propagated — the slot is already back in the pool.
+    slotGuard.Release();
 
     // Resample to 16kHz
     if (sampleRate != 16000)

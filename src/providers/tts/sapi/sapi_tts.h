@@ -10,7 +10,8 @@
 namespace HoundTTS {
 
 // Synthesizes text to 16kHz mono 16-bit PCM using Windows SAPI (ISpVoice).
-// Returns the full PCM buffer in one call (synthesize-all).
+// Returns the full PCM buffer in one call (synthesize-all), with any RIFF/WAVE
+// container header removed.
 class SapiTTS {
 public:
     // Synthesize text to PCM.

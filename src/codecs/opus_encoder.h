@@ -27,6 +27,7 @@ public:
 
     // Encode a chunk of PCM samples, pushing complete 40ms frames to queue.
     // May be called multiple times; partial frames are buffered internally.
+    // Ignores a null pcm pointer and non-positive sample counts.
     void EncodeChunk(const int16_t* pcm, int samples, AudioQueue& queue);
 
     // Pad the internal buffer to a full frame and push the final frame.
@@ -35,10 +36,20 @@ public:
 
     ~OpusFrameEncoder();
 
+    // Declaring the deleted copy operations below suppresses the implicit
+    // default constructor, so restate it: the encoder is default-constructed
+    // on the Opus worker thread and configured by Init().
+    OpusFrameEncoder() = default;
+
+    // Owns a raw OpusEncoder*: copying would double-free it.
+    OpusFrameEncoder(const OpusFrameEncoder&) = delete;
+    OpusFrameEncoder& operator=(const OpusFrameEncoder&) = delete;
+
 private:
     OpusEncoder* m_encoder = nullptr;
     std::vector<int16_t> m_buf;   // partial-frame accumulator
 
+    // Requires exactly kFrameSamples valid samples in `frame`.
     void EncodeFrame(const int16_t* frame, AudioQueue& queue);
 };
 

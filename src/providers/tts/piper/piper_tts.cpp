@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
@@ -119,7 +120,8 @@ static std::vector<int16_t> Resample(const int16_t* in, int inCount,
 
 static void ApplyVolume(std::vector<int16_t>& chunk, double volume) {
     if (volume >= 1.0) return;
-    double vol = std::max(0.0, std::min(1.0, volume));
+    const double vol = Utils::NormalizeVolume(volume);
+    if (vol >= 1.0) return;
     for (auto& s : chunk)
         s = static_cast<int16_t>(s * vol);
 }
@@ -195,12 +197,48 @@ bool PiperTTS::SynthesizeViaNative(
     auto& pool   = PiperModelPool::Instance();
     auto& native = PiperNative::Instance();
 
-    piper_synthesizer* synth = pool.Acquire(modelPath, espeakDataPath);
+    // Owned copy taken BEFORE any handle is acquired: the guard below stores it,
+    // so nothing that can throw (this copy) runs between Acquire() and guarding.
+    std::string modelPathOwned = modelPath;
+
+    // Acquire() itself can throw (piper_create / allocation). No guard exists
+    // yet at that point, so complete the queue here or a downstream consumer
+    // blocks in Pop() forever.
+    piper_synthesizer* synth = nullptr;
+    try {
+        synth = pool.Acquire(modelPath, espeakDataPath);
+    } catch (...) {
+        try { queue.MarkDone(); } catch (...) {}
+        throw;
+    }
     if (!synth) {
         LogE("Failed to acquire synthesizer for model: " + modelPath);
         queue.MarkDone();
         return false;
     }
+
+    // ONE guard owns the handle AND the completion signal, built immediately
+    // after Acquire() from already-owned state: an exception between taking the
+    // handle and guarding it can no longer leak the pooled synthesizer, and the
+    // destructor always signals completion before the handle returns to the pool.
+    struct SynthGuard {
+        PiperModelPool& pool;
+        std::string modelPath;   // owned copy: self-contained guard
+        piper_synthesizer* synth;
+        PCMQueue& q;
+        // Runs during stack unwinding, so it must not throw: Release takes a
+        // lock and allocates, either of which could otherwise call terminate.
+        ~SynthGuard() noexcept {
+            try { q.MarkDone(); } catch (...) {}
+            try {
+                pool.Release(modelPath, synth);
+            } catch (const std::exception& e) {
+                try { LogE(std::string("SynthGuard::Release failed: ") + e.what()); } catch (...) {}
+            } catch (...) {
+                try { LogE("SynthGuard::Release failed: unknown exception"); } catch (...) {}
+            }
+        }
+    } guard{pool, std::move(modelPathOwned), synth, queue};
 
     // Resolve speaker ID (numeric or named, with bounds check and name fallback)
     std::string modelJson = ReadModelJson(modelPath);
@@ -218,7 +256,6 @@ bool PiperTTS::SynthesizeViaNative(
     int rc = pool.StartSynthesize(synth, text.c_str(), &opts);
     if (rc != PIPER_OK) {
         LogE("piper_synthesize_start failed: " + std::to_string(rc));
-        pool.Release(modelPath, synth);
         queue.MarkDone();
         return false;
     }
@@ -263,7 +300,6 @@ bool PiperTTS::SynthesizeViaNative(
         LogE("native synthesis failed after " + std::to_string(totalSamples) + " samples");
     else
         LogI("native synthesis complete, total output samples: " + std::to_string(totalSamples));
-    pool.Release(modelPath, synth);
     queue.MarkDone();
     return !failed;
 }
@@ -314,10 +350,41 @@ bool PiperTTS::SynthesizeViaSubprocess(
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
 
+    // Completion must survive any throw below (Push/Resample/allocation).
+    struct DoneGuard {
+        PCMQueue& q;
+        ~DoneGuard() noexcept { try { q.MarkDone(); } catch (...) {} }
+    } doneGuard{queue};
+
+    PROCESS_INFORMATION pi{};
+    // Close whatever is still open on every exit path. Explicit closes below
+    // null the handle so this never double-closes. A piper.exe still running
+    // when this fires (early return, throw) is terminated first: closing its
+    // handles alone would orphan it.
+    struct HandleCloser {
+        HANDLE& stdinRd; HANDLE& stdinWr; HANDLE& stdoutRd; HANDLE& stdoutWr;
+        PROCESS_INFORMATION& pi;
+        ~HandleCloser() {
+            if (stdinRd)  CloseHandle(stdinRd);
+            if (stdinWr)  CloseHandle(stdinWr);
+            if (stdoutRd) CloseHandle(stdoutRd);
+            if (stdoutWr) CloseHandle(stdoutWr);
+            if (pi.hProcess) {
+                DWORD exitCode = 0;
+                if (::GetExitCodeProcess(pi.hProcess, &exitCode) &&
+                    exitCode == STILL_ACTIVE) {
+                    ::TerminateProcess(pi.hProcess, 1);
+                    ::WaitForSingleObject(pi.hProcess, 1000);
+                }
+                CloseHandle(pi.hProcess);
+            }
+            if (pi.hThread)  CloseHandle(pi.hThread);
+        }
+    } handleCloser{hStdinRd, hStdinWr, hStdoutRd, hStdoutWr, pi};
+
     if (!CreatePipe(&hStdinRd, &hStdinWr, &sa, 0)) { LogE("CreatePipe(stdin) failed"); queue.MarkDone(); return false; }
     if (!CreatePipe(&hStdoutRd, &hStdoutWr, &sa, 0)) {
         LogE("CreatePipe(stdout) failed");
-        CloseHandle(hStdinRd); CloseHandle(hStdinWr);
         queue.MarkDone(); return false;
     }
     SetHandleInformation(hStdinWr,  HANDLE_FLAG_INHERIT, 0);
@@ -330,25 +397,23 @@ bool PiperTTS::SynthesizeViaSubprocess(
     si.hStdOutput = hStdoutWr;
     si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
 
-    PROCESS_INFORMATION pi{};
     std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
     cmdBuf.push_back(L'\0');
     BOOL ok = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
                               CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
 
-    CloseHandle(hStdinRd);
-    CloseHandle(hStdoutWr);
+    CloseHandle(hStdinRd);  hStdinRd = nullptr;
+    CloseHandle(hStdoutWr); hStdoutWr = nullptr;
 
     if (!ok) {
         LogE("CreateProcessW failed GLE=" + std::to_string(GetLastError()));
-        CloseHandle(hStdinWr); CloseHandle(hStdoutRd);
         queue.MarkDone(); return false;
     }
     LogI("piper.exe launched PID=" + std::to_string(pi.dwProcessId));
 
     DWORD written = 0;
     WriteFile(hStdinWr, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
-    CloseHandle(hStdinWr);
+    CloseHandle(hStdinWr); hStdinWr = nullptr;
 
     static const int kChunkBytes = 4096;
     std::vector<uint8_t> rawBuf(kChunkBytes);
@@ -373,18 +438,18 @@ bool PiperTTS::SynthesizeViaSubprocess(
         ApplyVolume(chunk, volume);
         queue.Push(std::move(chunk));
         size_t remainder = leftover.size() - sampleBytes;
-        if (remainder > 0) leftover = {leftover.end() - (int)remainder, leftover.end()};
-        else leftover.clear();
+        // Keep only the trailing partial sample (0 or 1 byte) for the next read.
+        leftover.erase(leftover.begin(),
+                       leftover.end() - static_cast<std::ptrdiff_t>(remainder));
     }
 
     LogI("total PCM bytes: " + std::to_string(totalPcmBytes));
     queue.MarkDone();
-    CloseHandle(hStdoutRd);
     DWORD exitCode = 0;
     WaitForSingleObject(pi.hProcess, 5000);
     GetExitCodeProcess(pi.hProcess, &exitCode);
     if (exitCode != 0) LogE("piper.exe exit code: " + std::to_string(exitCode));
-    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    // Remaining pipe/process handles are closed by handleCloser.
     return exitCode == 0;
 }
 

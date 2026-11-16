@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <sstream>
 #include <ctime>
+#include <cmath>
+#include <cctype>
 #include <algorithm>
 
 namespace HoundTTS {
@@ -16,6 +18,11 @@ namespace HoundTTS {
 static const char* kTag = "HoundTTS/Polly";
 static void LogE(const std::string& msg) { HoundTTS::Logger::Instance().Error(kTag, msg); }
 static void LogI(const std::string& msg) { HoundTTS::Logger::Instance().Info(kTag, msg); }
+
+// Escape XML special characters before interpolating plain text into SSML.
+// Polly parses the request `Text` as SSML, so a bare '&' or '<' in the source
+// text would produce a 400 instead of speech. Utils::XmlEscape is the shared
+// SSML sanitiser (same policy as Azure).
 
 static std::string DefaultVoice(const std::string& culture, const std::string& gender) {
     bool male = (gender == "male");
@@ -40,19 +47,9 @@ static std::string SpeedToRate(double speed) {
     return ss.str();
 }
 
-static std::string JsonEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if      (c == '"')  out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else                out += c;
-    }
-    return out;
-}
-
-bool AwsTTS::SynthesizeToQueue(
+// Synthesis body. May throw (httplib, allocation); the public entry point
+// below catches and guarantees queue.MarkDone().
+static bool Synthesize(
     const std::string& text,
     const std::string& accessKey,
     const std::string& secretKey,
@@ -65,17 +62,34 @@ bool AwsTTS::SynthesizeToQueue(
     double volume,
     PCMQueue& queue)
 {
+    // Note: completion (queue.MarkDone()) is owned solely by SynthesizeToQueue,
+    // so a throw from an internal step cannot make it fire twice.
     if (accessKey.empty() || secretKey.empty() || region.empty()) {
         LogE("Polly access_key, secret_key, or region not configured");
-        queue.MarkDone();
+        return false;
+    }
+    // Credentials are interpolated into the Authorization header; reject
+    // control characters here rather than reporting a generic signing failure.
+    if (Utils::HasControlChars(accessKey) || Utils::HasControlChars(secretKey)) {
+        LogE("Polly credentials contain control characters");
+        return false;
+    }
+    if (!AwsAuth::IsValidAwsRegion(region)) {
+        LogE("Polly region is not a valid AWS region: " + region);
+        return false;
+    }
+    if (text.empty()) {
         return false;
     }
 
     std::string voiceId = voice.empty() ? DefaultVoice(culture, gender) : voice;
     std::string eng     = engine.empty() ? "standard" : engine;
 
+    // NaN/Inf bypass both comparisons; SpeedToRate's int cast on NaN is UB.
+    if (!std::isfinite(speed)) speed = 1.0;
     if (speed < 0.2) speed = 0.2;
     if (speed > 5.0) speed = 5.0;
+    volume = Utils::NormalizeVolume(volume);
 
     size_t ssmlOff = 0;
     while (ssmlOff < text.size() && std::isspace((unsigned char)text[ssmlOff])) ++ssmlOff;
@@ -87,14 +101,17 @@ bool AwsTTS::SynthesizeToQueue(
 
     std::string inputText, textType;
     if (isSsml) {
-        inputText = JsonEscape(text);
+        inputText = Utils::JsonEscape(text);
         textType = "ssml";
     } else if (std::abs(speed - 1.0) > 0.01) {
-        inputText = "<speak><prosody rate='" + SpeedToRate(speed) + "'>" +
-                    JsonEscape(text) + "</prosody></speak>";
+        // Plain text wrapped in SSML: XML-escape it first, then JSON-escape the
+        // finished document for the request body (the isSsml path is already XML).
+        inputText = Utils::JsonEscape(
+            "<speak><prosody rate='" + SpeedToRate(speed) + "'>" +
+            Utils::XmlEscape(text) + "</prosody></speak>");
         textType = "ssml";
     } else {
-        inputText = JsonEscape(text);
+        inputText = Utils::JsonEscape(text);
         textType = "text";
     }
 
@@ -102,10 +119,10 @@ bool AwsTTS::SynthesizeToQueue(
     bodyStream << "{"
                << "\"Text\":\"" << inputText << "\","
                << "\"TextType\":\"" << textType << "\","
-               << "\"VoiceId\":\"" << voiceId << "\","
+               << "\"VoiceId\":\"" << Utils::JsonEscape(voiceId) << "\","
                << "\"OutputFormat\":\"pcm\","
                << "\"SampleRate\":\"16000\","
-               << "\"Engine\":\"" << eng << "\""
+               << "\"Engine\":\"" << Utils::JsonEscape(eng) << "\""
                << "}";
     std::string body = bodyStream.str();
 
@@ -126,6 +143,10 @@ bool AwsTTS::SynthesizeToQueue(
     std::string authHeader = AwsAuth::ComputeSigV4Auth(
         accessKey, secretKey, region, "polly", host,
         "POST", "/v1/speech", body, amzDate, dateStamp);
+    if (authHeader.empty()) {
+        LogE("SigV4 signing failed (empty Authorization header)");
+        return false;
+    }
 
     httplib::SSLClient cli(host, 443);
     cli.set_connection_timeout(10);
@@ -143,17 +164,14 @@ bool AwsTTS::SynthesizeToQueue(
     auto res = cli.Post("/v1/speech", headers, body, "application/json");
     if (!res) {
         LogE("HTTP request failed (connection error)");
-        queue.MarkDone();
         return false;
     }
     if (res->status != 200) {
         LogE("HTTP " + std::to_string(res->status) + " body=[" + res->body + "]");
-        queue.MarkDone();
         return false;
     }
     if (res->body.empty()) {
         LogE("No PCM data received (empty body)");
-        queue.MarkDone();
         return false;
     }
 
@@ -162,20 +180,47 @@ bool AwsTTS::SynthesizeToQueue(
     LogI("Received " + std::to_string(len) + " bytes of PCM");
 
     size_t sampleBytes = (len / 2) * 2;
-    if (sampleBytes > 0) {
-        const int16_t* src = reinterpret_cast<const int16_t*>(data);
-        int sampleCount = static_cast<int>(sampleBytes / 2);
-        std::vector<int16_t> samples(src, src + sampleCount);
-        if (volume < 1.0) {
-            double vol = std::max(0.0, std::min(1.0, volume));
-            for (auto& s : samples)
-                s = static_cast<int16_t>(s * vol);
-        }
-        queue.Push(std::move(samples));
+    std::vector<int16_t> samples = Utils::PcmBytesToSamples(data, sampleBytes);
+    if (samples.empty()) {
+        // A success status with no complete sample is a failure, not silence:
+        // callers must not observe "ok" with no audio (matches Google/Azure).
+        LogE("No PCM samples decoded from response (" + std::to_string(len) + " bytes)");
+        return false;
     }
-
-    queue.MarkDone();
+    if (volume < 1.0) {
+        for (auto& s : samples)
+            s = static_cast<int16_t>(s * volume);
+    }
+    queue.Push(std::move(samples));
     return true;
+}
+
+bool AwsTTS::SynthesizeToQueue(
+    const std::string& text,
+    const std::string& accessKey,
+    const std::string& secretKey,
+    const std::string& region,
+    const std::string& voice,
+    const std::string& engine,
+    const std::string& culture,
+    const std::string& gender,
+    double speed,
+    double volume,
+    PCMQueue& queue)
+{
+    // Single owner of completion: Synthesize() never calls MarkDone(), so a
+    // throw from one of its steps cannot deliver it twice.
+    bool result = false;
+    try {
+        result = Synthesize(text, accessKey, secretKey, region, voice, engine,
+                            culture, gender, speed, volume, queue);
+    } catch (const std::exception& e) {
+        LogE(std::string("Synthesis threw: ") + e.what());
+    } catch (...) {
+        LogE("Synthesis threw: unknown exception");
+    }
+    queue.MarkDone();
+    return result;
 }
 
 } // namespace HoundTTS

@@ -10,13 +10,14 @@
 namespace HoundTTS {
 
 // Synthesizes text via the OpenAI (or compatible) TTS REST API.
-// Decodes WAV/Ogg-Opus response → pushes raw PCM chunks to PCMQueue.
-// Calls queue.MarkDone() when done (success or failure).
+// Decodes WAV/Ogg-Opus response → pushes 16kHz mono int16 PCM chunks to PCMQueue.
+// Calls queue.MarkDone() on every normal return path (success or failure);
+// TTSPipeline's dispatch catch-all delivers MarkDone if this throws.
 class OpenAITTS {
 public:
     // endpoint: Base URL, e.g. "https://api.openai.com" or "http://localhost:8080"
     //           /v1/audio/speech is always appended.
-    // apiKey:   Bearer token (may be empty for local deployments)
+    // apiKey:   Bearer token (may be empty for local deployments; never logged)
     // model:    TTS model name, e.g. "tts-1" or "tts-1-hd"
     // voice:    Voice name, e.g. "alloy", "echo", "shimmer"
     // speed:    Speaking rate (0.25–4.0)

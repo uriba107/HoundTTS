@@ -106,16 +106,28 @@ Add dispatch branch in `TTSPipeline::Produce` after existing ones:
 ```cpp
 } else if (provider == TtsProvider::Foo) {
     std::string fooKey = cfg.GetFooKey();
-    std::thread([message, fooKey, voice, speed, volume, dispatchQueue, finalizeCache]() {
-        bool ok = FooTTS::SynthesizeToQueue(message, fooKey, voice, speed, volume, *dispatchQueue);
-        finalizeCache(ok);
-    }).detach();
+    try {
+        SpawnDetached([message, fooKey, voice, speed, volume, dispatchQueue, complete]() {
+            bool ok = false;
+            try {
+                ok = FooTTS::SynthesizeToQueue(message, fooKey, voice, speed, volume, *dispatchQueue);
+            } catch (const std::exception& e) {
+                LogFail("Foo synthesis threw", &e);
+            } catch (...) {
+                LogFail("Foo synthesis threw: unknown exception");
+            }
+            complete(ok);
+        });
+    } catch (...) {
+        complete(false);   // thread creation failed; still complete the queue
+    }
 ```
 
 Key patterns visible in every existing branch:
-- Capture `dispatchQueue` (shared_ptr) and `finalizeCache` (lambda) by value
-- Call `finalizeCache(ok)` after synthesis
-- Use `std::thread(...).detach()` for async; inline + `dispatchQueue->MarkDone()` for sync
+- Capture `dispatchQueue` (shared_ptr) and `complete` (noexcept lambda) by value
+- Call `complete(ok)` after synthesis on every path, including exceptions
+- Use `SpawnDetached(...)` for async; inline + `dispatchQueue->MarkDone()` for sync
+- Log from a catch handler with `LogFail` (noexcept), never `LogE`
 - `cfg` is `ConfigReader::Instance()` already captured above
 
 ## 5. `CMakeLists.txt` — source registration

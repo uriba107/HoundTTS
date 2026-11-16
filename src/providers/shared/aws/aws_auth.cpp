@@ -1,4 +1,5 @@
 #include "aws_auth.h"
+#include "utils.h"
 
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
@@ -12,7 +13,11 @@
 namespace HoundTTS {
 namespace AwsAuth {
 
+static const char* kTag = "HoundTTS/AwsAuth";
+static void LogE(const std::string& msg) { Logger::Instance().Error(kTag, msg); }
+
 std::string HexEncode(const unsigned char* data, size_t len) {
+    if (!data || len == 0) return "";
     std::ostringstream ss;
     ss << std::hex << std::setfill('0');
     for (size_t i = 0; i < len; ++i)
@@ -20,9 +25,16 @@ std::string HexEncode(const unsigned char* data, size_t len) {
     return ss.str();
 }
 
+bool IsValidAwsRegion(const std::string& region) {
+    return Utils::IsSafeHostLabel(region, 32);
+}
+
 std::string SHA256Hex(const std::string& data) {
     unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256(reinterpret_cast<const unsigned char*>(data.data()), data.size(), hash);
+    if (!SHA256(reinterpret_cast<const unsigned char*>(data.data()), data.size(), hash)) {
+        LogE("SHA256 failed");
+        return "";
+    }
     return HexEncode(hash, SHA256_DIGEST_LENGTH);
 }
 
@@ -31,10 +43,19 @@ std::vector<unsigned char> HmacSHA256(const std::vector<unsigned char>& key,
 {
     unsigned char out[EVP_MAX_MD_SIZE];
     unsigned int outLen = 0;
-    HMAC(EVP_sha256(),
-         key.data(), static_cast<int>(key.size()),
-         reinterpret_cast<const unsigned char*>(data.data()), data.size(),
-         out, &outLen);
+    if (key.empty()) {
+        // Empty key only reachable via a prior failure; fail closed instead of
+        // relying on OpenSSL's handling of a null key pointer.
+        LogE("HMAC-SHA256: empty key");
+        return {};
+    }
+    if (!HMAC(EVP_sha256(),
+              key.data(), static_cast<int>(key.size()),
+              reinterpret_cast<const unsigned char*>(data.data()), data.size(),
+              out, &outLen) || outLen == 0) {
+        LogE("HMAC-SHA256 failed");
+        return {};
+    }
     return std::vector<unsigned char>(out, out + outLen);
 }
 
@@ -50,10 +71,16 @@ std::vector<unsigned char> DeriveSigningKey(const std::string& secretKey,
                                              const std::string& region,
                                              const std::string& service)
 {
-    auto kDate    = HmacSHA256("AWS4" + secretKey, date);
-    auto kRegion  = HmacSHA256(kDate,              region);
-    auto kService = HmacSHA256(kRegion,            service);
-    auto kSigning = HmacSHA256(kService,           "aws4_request");
+    // Propagate a failure at any step: HMAC with an empty key would otherwise
+    // succeed and mask the broken chain, defeating ComputeSigV4Auth's
+    // fail-closed empty-key check.
+    auto kDate = HmacSHA256("AWS4" + secretKey, date);
+    if (kDate.empty()) return {};
+    auto kRegion = HmacSHA256(kDate, region);
+    if (kRegion.empty()) return {};
+    auto kService = HmacSHA256(kRegion, service);
+    if (kService.empty()) return {};
+    auto kSigning = HmacSHA256(kService, "aws4_request");
     return kSigning;
 }
 
@@ -68,20 +95,45 @@ std::string ComputeSigV4Auth(const std::string& accessKey,
                               const std::string& amzDate,
                               const std::string& dateStamp)
 {
+    // Fail closed on missing inputs: signing with empty credentials would
+    // otherwise emit a syntactically valid header and fail opaquely at runtime.
+    if (accessKey.empty() || secretKey.empty() || region.empty() ||
+        service.empty() || host.empty() || method.empty() ||
+        amzDate.empty() || dateStamp.empty()) {
+        LogE("SigV4: missing required input");
+        return "";
+    }
+    if (!IsValidAwsRegion(region)) {
+        LogE("SigV4: invalid AWS region");
+        return "";
+    }
+    if (Utils::HasControlChars(accessKey) || Utils::HasControlChars(secretKey) ||
+        Utils::HasControlChars(region) || Utils::HasControlChars(service) ||
+        Utils::HasControlChars(host) || Utils::HasControlChars(method) ||
+        Utils::HasControlChars(uri) || Utils::HasControlChars(amzDate) ||
+        Utils::HasControlChars(dateStamp)) {
+        LogE("SigV4: control character in input");
+        return "";
+    }
+
     std::string canonicalHeaders =
         "host:" + host + "\n"
         "x-amz-date:" + amzDate + "\n";
     std::string signedHeaders = "host;x-amz-date";
     std::string bodyHash = SHA256Hex(body);
+    if (bodyHash.empty()) return "";
     std::string canonicalRequest =
         method + "\n" + uri + "\n" + "\n" +
         canonicalHeaders + "\n" + signedHeaders + "\n" + bodyHash;
     std::string credentialScope = dateStamp + "/" + region + "/" + service + "/aws4_request";
+    std::string canonicalHash = SHA256Hex(canonicalRequest);
+    if (canonicalHash.empty()) return "";
     std::string stringToSign =
         "AWS4-HMAC-SHA256\n" + amzDate + "\n" +
-        credentialScope + "\n" + SHA256Hex(canonicalRequest);
+        credentialScope + "\n" + canonicalHash;
     auto signingKey = DeriveSigningKey(secretKey, dateStamp, region, service);
     auto sigBytes   = HmacSHA256(signingKey, stringToSign);
+    if (signingKey.empty() || sigBytes.empty()) return "";
     std::string signature = HexEncode(sigBytes.data(), sigBytes.size());
     return "AWS4-HMAC-SHA256 "
            "Credential=" + accessKey + "/" + credentialScope + ", "

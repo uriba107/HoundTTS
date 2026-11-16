@@ -5,11 +5,12 @@
 
 .DESCRIPTION
     Builds the HoundTTS DLL via Docker and extracts the dist packages.
-    Defaults to the Linux/MinGW cross-compile pipeline (Dockerfile).
-    Use -Windows to build with the MSVC/Windows container pipeline (Dockerfile.windows).
+    Defaults to the Windows/MSVC container pipeline (Dockerfile.windows).
+    Use -Windows:$false to build with the Linux/MinGW cross-compile pipeline (Dockerfile).
 
 .PARAMETER Windows
-    Use Dockerfile.windows (MSVC + Windows SDK). Requires Docker Desktop in Windows containers mode.
+    Use Dockerfile.windows (MSVC + Windows SDK). Defaults to $true.
+    Requires Docker Desktop in Windows containers mode.
 
 .PARAMETER Context
     Docker context to use. Defaults to 'default'.
@@ -19,9 +20,9 @@
 
 .EXAMPLE
     .\build-docker.ps1
-    .\build-docker.ps1 -Windows
-    .\build-docker.ps1 -Windows -Context winhost
-    .\build-docker.ps1 -Windows -NoCache
+    .\build-docker.ps1 -Context winhost
+    .\build-docker.ps1 -NoCache
+    .\build-docker.ps1 -Windows:$false
 #>
 param(
     [switch]$Windows = $true,
@@ -111,16 +112,26 @@ if ($Windows) {
     $timeout  = 10
     $proceed  = $true
     $deadline = (Get-Date).AddSeconds($timeout)
-    while ((Get-Date) -lt $deadline) {
-        if ([Console]::KeyAvailable) {
-            $key = [Console]::ReadKey($true)
-            Write-Host ""
-            if ($key.KeyChar -match '^[Nn]') { $proceed = $false }
-            break
+
+    # Console.KeyAvailable throws when stdin is redirected (CI, build.bat piped
+    # through a wrapper, non-interactive shells). Fall through without waiting.
+    $hasConsole = $true
+    try { $null = [Console]::KeyAvailable } catch { $hasConsole = $false }
+
+    if ($hasConsole) {
+        while ((Get-Date) -lt $deadline) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                Write-Host ""
+                if ($key.KeyChar -match '^[Nn]') { $proceed = $false }
+                break
+            }
+            Start-Sleep -Milliseconds 200
         }
-        Start-Sleep -Milliseconds 200
+        if ((Get-Date) -ge $deadline) { Write-Host " (timed out, continuing)" }
+    } else {
+        Write-Host " (no console input, continuing)"
     }
-    if ((Get-Date) -ge $deadline) { Write-Host " (timed out, continuing)" }
     if (-not $proceed) {
         Write-Host "Build cancelled." -ForegroundColor Red
         Stop-Transcript | Out-Null

@@ -26,7 +26,11 @@ struct SRSPositionData {
     double lastSentLat{91.0};
     double lastSentLon{181.0};
     double lastSentAlt{-500.0};
-    std::chrono::steady_clock::time_point lastSentAt{};  // zero = never
+    std::chrono::steady_clock::time_point lastSentAt{};   // zero = never
+    // Last send ATTEMPT (successful or not). A failed update is not recorded as
+    // delivered, so it stays eligible for retry; this throttles the retry so the
+    // 10 ms stream loop cannot turn an unreachable server into a TCP/log flood.
+    std::chrono::steady_clock::time_point lastAttemptAt{};
 
     // Callback to send a TCP position UPDATE on the active SRS connection.
     // Set by SRSClient when the stream starts; called by l_updateSession.

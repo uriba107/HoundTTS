@@ -24,7 +24,8 @@ struct TTSRequest {
     int         srsPort = 5002;
     std::string srsHost;        // SRS server hostname/IP (default: localhost)
     bool        encrypt = false;
-    int         encKey  = 0;    // Encryption key (0-255)
+    int         encKey  = 0;    // Encryption key 0-255, clamped at the Lua boundary
+                                // (lua_tts.cpp) before narrowing to TransmitParams::encKey
     std::string srsBluePassword; // EAM password for blue coalition (2)
     std::string srsRedPassword;  // EAM password for red coalition (1)
 
@@ -86,6 +87,17 @@ struct TransmitParams {
 // Receives already-synthesised 16kHz mono PCM and transmission parameters.
 // Returns true if the transmission was dispatched (non-blocking implementations
 // may return before the stream completes).
+//
+// Ownership / lifetime:
+//  - The caller owns the backend instance (lua_tts.cpp holds it in a
+//    shared_ptr captured by the detached worker thread); it outlives Transmit().
+//  - The caller owns `pcm` and keeps it alive via shared_ptr; the backend
+//    consumes it until the queue is marked done.
+//  - Transmit() may be called from a detached thread and implementations may
+//    run their own detached thread. Anything the worker needs after Transmit()
+//    returns (params fields, params.session, pcm) MUST be copied into that
+//    thread — `params` is a const reference to a caller-owned object that may
+//    be destroyed as soon as Transmit() returns.
 class ITTSBackend {
 public:
     virtual ~ITTSBackend() = default;

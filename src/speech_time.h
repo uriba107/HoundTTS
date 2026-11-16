@@ -14,6 +14,10 @@ namespace HoundTTS {
 // speed:    rate value (interpretation depends on provider)
 inline double GetSpeechTime(int length, double speed = 1.0,
                             TtsProvider provider = TtsProvider::Sapi) {
+    if (length <= 0) return 0.0;
+    // NaN/inf would poison the switch below (NaN fails every comparison).
+    if (!std::isfinite(speed)) speed = (provider == TtsProvider::Sapi) ? 0.0 : 1.0;
+
     double speedFactor = 1.0;
 
     switch (provider) {
@@ -21,6 +25,9 @@ inline double GetSpeechTime(int length, double speed = 1.0,
         // SAPI rate: -10..+10 where 0 = normal.
         // Matches STTS.getSpeechTime and HOUND convention.
         {
+            // Clamp to the SAPI rate scale; an unclamped value produces an
+            // unbounded speedFactor and a nonsense duration estimate.
+            speed = std::max(-10.0, std::min(10.0, speed));
             const double maxRateRatio = 3.0;
             if (speed != 0.0) {
                 speedFactor = std::abs(speed) * (maxRateRatio - 1.0) / 10.0 + 1.0;

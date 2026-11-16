@@ -19,6 +19,31 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
     static const int kChunkFrames = kSampleRate;   // 1 second per chunk
     static const float k2Pi = 2.0f * 3.14159265f;
 
+    if (!queue) {
+        Logger::Instance().Error("HoundTTS/Tone", "Null PCM queue; aborting tone generation");
+        return;
+    }
+
+    // Completion is signalled on every exit path — including an exception from
+    // Push()/allocation — otherwise a consumer blocked in PCMQueue::Pop() hangs.
+    struct MarkDoneGuard {
+        PCMQueue* q;
+        // MarkDone allocates tail silence and may throw; a throwing destructor
+        // during stack unwinding would call std::terminate.
+        ~MarkDoneGuard() noexcept {
+            if (!q) return;
+            try {
+                q->MarkDone();
+            } catch (const std::exception& e) {
+                try { Logger::Instance().Error("HoundTTS/Tone",
+                        std::string("MarkDone failed: ") + e.what()); } catch (...) {}
+            } catch (...) {
+                try { Logger::Instance().Error("HoundTTS/Tone",
+                        "MarkDone failed: unknown exception"); } catch (...) {}
+            }
+        }
+    } doneGuard{queue.get()};
+
     // Validate duration: NaN or Inf → safe fallback
     if (!std::isfinite(durationS)) {
         Logger::Instance().Error("HoundTTS/Tone",
@@ -52,22 +77,37 @@ void GenerateTone(std::shared_ptr<PCMQueue> queue,
 
         std::vector<int16_t> chunk(chunkSize);
         for (int i = 0; i < chunkSize; ++i) {
+            // Match noise: trim the in-flight chunk promptly on kill instead of
+            // queuing up to a full second of tone for transmission.
+            if ((i % 1000 == 0) && !isAlive()) {
+                chunk.resize(static_cast<size_t>(i));
+                break;
+            }
             float t   = static_cast<float>(samplesGenerated + i) / kSampleRate;
             float val = std::sin(k2Pi * freqHz * t);
+            // sin() can return marginally outside [-1, 1]; an unclamped cast to
+            // int16_t would be UB. Mirror noise.cpp.
+            val = std::max(-1.0f, std::min(1.0f, val));
             chunk[i] = static_cast<int16_t>(val * 32767.0f * vol);
         }
 
-        samplesGenerated += chunkSize;
-        queue->Push(std::move(chunk));
+        // A killed in-flight chunk may have been trimmed to empty. Pushing it
+        // would inject the PTT lead-in silence for audio that does not exist
+        // (and a downstream MarkDone would add the tail), so skip it — same
+        // guard as noise.cpp.
+        if (!chunk.empty()) {
+            samplesGenerated += static_cast<int>(chunk.size());
+            queue->Push(std::move(chunk));
 
-        // Pace at ~real-time to prevent unbounded audio buffering downstream.
-        int paceMs = std::max(0, chunkSize * 1000 / kSampleRate - 200);
-        for (int waited = 0; waited < paceMs && isAlive(); waited += 100) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Pace at ~real-time to prevent unbounded audio buffering
+            // downstream, based on what was actually queued.
+            int paceMs = std::max(0, static_cast<int>(chunkSize) * 1000 / kSampleRate - 200);
+            for (int waited = 0; waited < paceMs && isAlive(); waited += 100) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
     }
-
-    queue->MarkDone();
+    // MarkDone is delivered by doneGuard on scope exit.
 }
 
 } // namespace HoundTTS

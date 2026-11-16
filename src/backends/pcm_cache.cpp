@@ -42,39 +42,46 @@ static uint64_t fnv1a_64(const void* data, size_t len) {
 // ---------------------------------------------------------------------------
 uint64_t ComputeTTSRequestKey(const TTSRequest& req) {
     // Build a canonical string of all fields that affect audio output.
-    // Fields separated by unit separator (0x1f) to avoid ambiguity.
+    // Each field is length-prefixed ("<len>:<bytes>") so a value containing the
+    // separator byte cannot shift a field boundary and collide with a different
+    // request.
     const char sep = '\x1f';
     std::string canonical;
     canonical.reserve(512);
 
-    canonical += TtsProviderName(req.provider);             canonical += sep;
-    canonical += req.message;                                canonical += sep;
-    canonical += req.voice;                                  canonical += sep;
-    canonical += req.speaker;                                canonical += sep;
-    canonical += req.gender;                                 canonical += sep;
-    canonical += req.culture;                                canonical += sep;
+    auto appendField = [&canonical, sep](const std::string& v) {
+        canonical += std::to_string(v.size());
+        canonical += ':';
+        canonical += v;
+        canonical += sep;
+    };
+
+    appendField(TtsProviderName(req.provider));
+    appendField(req.message);
+    appendField(req.voice);
+    appendField(req.speaker);
+    appendField(req.gender);
+    appendField(req.culture);
 
     // Speed: use fixed-precision string to avoid floating-point repr differences
     {
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(6) << req.speed;
-        canonical += ss.str();
+        appendField(ss.str());
     }
-    canonical += sep;
 
     // Volume
     {
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(6) << req.volume;
-        canonical += ss.str();
+        appendField(ss.str());
     }
-    canonical += sep;
 
-    canonical += req.awsPollyEngine;                         canonical += sep;
-    canonical += req.isSSML ? "1" : "0";                     canonical += sep;
-    canonical += TranslateProviderName(req.translateProvider); canonical += sep;
-    canonical += req.translateLanguage;                       canonical += sep;
-    canonical += req.translateSourceLanguage;
+    appendField(req.awsPollyEngine);
+    appendField(req.isSSML ? "1" : "0");
+    appendField(TranslateProviderName(req.translateProvider));
+    appendField(req.translateLanguage);
+    appendField(req.translateSourceLanguage);
 
     return fnv1a_64(canonical.data(), canonical.size());
 }
